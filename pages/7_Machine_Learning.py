@@ -1,3 +1,3 @@
 import streamlit as st
 
-sr.write("Em desenvolvimento")
+st.write("Em desenvolvimento")
