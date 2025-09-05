@@ -8,8 +8,6 @@ import datetime as dt
 from src.data_pipeline import df, oleo_quote
 from src.utils import plot_price_rsi, rsi
 
-st.set_page_config(layout="wide", page_title="Análise de ativos")
-
 base="dark"
 primaryColor="#7aa2f7"
 backgroundColor="#0E1117"

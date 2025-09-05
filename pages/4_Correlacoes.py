@@ -9,9 +9,6 @@ import seaborn as sns
 import streamlit as st
 
 from src.data_pipeline import df
-# from src.utils import plot_price_rsi, rsi  # (não usados aqui)
-
-st.set_page_config(layout="wide", page_title="Correlações")
 
 base="dark"
 primaryColor="#7aa2f7"

@@ -1,6 +1,5 @@
 import streamlit as st
 
-
 base="dark"
 primaryColor="#7aa2f7"
 backgroundColor="#0E1117"

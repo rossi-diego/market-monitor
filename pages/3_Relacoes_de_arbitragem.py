@@ -10,8 +10,6 @@ import streamlit as st
 from src.utils import rsi, plot_ratio_std
 from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel, oleo_quote, oleo_flat_usd
 
-st.set_page_config(layout="wide", page_title="Relações de arbitragem")
-
 base="dark"
 primaryColor="#7aa2f7"
 backgroundColor="#0E1117"
