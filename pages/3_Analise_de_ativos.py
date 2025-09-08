@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 import datetime as dt
 from src.data_pipeline import df, oleo_quote
-from src.utils import plot_price_rsi, rsi
+from src.utils import plot_price_rsi, plot_price_rsi_plotly, rsi
 
 base="dark"
 primaryColor="#7aa2f7"
@@ -207,18 +207,17 @@ df_view = df_full.loc[mask].copy()
 if df_view.empty:
     st.info("Sem dados no período selecionado.")
 else:
-    fig = plot_price_rsi(
+    fig = plot_price_rsi_plotly(
         df_view,
         title=CLOSE.upper(),
         date_col="date",
         close_col=CLOSE,
-        rsi_col="RSI",        # já calculado acima
-        rsi_fn=None,          # não chamar função externa aqui
+        rsi_col="RSI",           # já calculado antes
+        rsi_fn=None,             # ou passe sua função se preferir calcular aqui
         rsi_len=14,
-        ma_window=st.session_state["ma_window"],  # <<< aplica seleção
-        show_bollinger=False,
+        ma_window=st.session_state["ma_window"],
+        show_bollinger=False,    # pode ligar via toggle na UI
         bands_window=20,
         bands_sigma=2.0,
-        theme="transparent",
     )
-    st.pyplot(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)

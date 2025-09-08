@@ -314,3 +314,191 @@ def plot_price_rsi(
     ax2.xaxis.set_major_formatter(formatter)
 
     return fig
+
+def plot_price_rsi_plotly(
+    df: pd.DataFrame,
+    title: str = "BOC1",
+    date_col: str = "date",
+    close_col: str = "boc1",
+    rsi_col: str = "RSI",       # se não existir, passe rsi_fn
+    rsi_fn=None,                # ex.: sua utils.rsi(df, ticker_col, date_col, window)
+    rsi_len: int = 14,
+    ma_window: int = 90,
+    # estilos
+    price_color: str = "#4A77FF",
+    ma_color: str = "#1f7a1f",
+    rsi_color: str = "#546E7A",
+    # bollinger
+    show_bollinger: bool = False,
+    bands_window: int = 20,
+    bands_sigma: float = 2.0,
+):
+    data = df.copy()
+    data[date_col] = pd.to_datetime(data[date_col], errors="coerce")
+    data = data.sort_values(date_col)
+
+    # força numérico
+    y = pd.to_numeric(data[close_col], errors="coerce")
+    x = data[date_col]
+    base = pd.DataFrame({ "x": x, "y": y }).dropna()
+
+    if base.shape[0] < 2:
+        fig = go.Figure()
+        fig.update_layout(title="Poucos pontos para plotar", template="plotly_dark", height=460)
+        return fig
+
+    # média móvel (min_periods para não virar NaN no início)
+    minp = max(2, ma_window // 4)
+    ma = base["y"].rolling(ma_window, min_periods=minp).mean()
+
+    # RSI: usa coluna se existir; senão calcula via rsi_fn, se fornecido
+    if rsi_col in data.columns:
+        rsi_series = pd.to_numeric(data[rsi_col], errors="coerce")
+        rsi_series = pd.Series(rsi_series.values, index=data.index)
+    elif callable(rsi_fn):
+        rsi_df = rsi_fn(
+            data[[date_col, close_col]].copy(),
+            ticker_col=close_col, date_col=date_col, window=rsi_len
+        )
+        rsi_series = pd.to_numeric(rsi_df["RSI"], errors="coerce")
+        rsi_series = pd.Series(rsi_series.values, index=rsi_df.index)
+        # realinhar pela data original
+        rsi_series = pd.Series(rsi_series.values, index=data.index)
+    else:
+        rsi_series = pd.Series(index=data.index, dtype=float)
+
+    # estatísticas para anotações
+    idx_max = base["y"].idxmax()
+    idx_min = base["y"].idxmin()
+    x_max, y_max = base.loc[idx_max, "x"], float(base.loc[idx_max, "y"])
+    x_min, y_min = base.loc[idx_min, "x"], float(base.loc[idx_min, "y"])
+    x_last, y_last = base["x"].iloc[-1], float(base["y"].iloc[-1])
+
+    # figura: 2 subplots
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        row_heights=[0.72, 0.28], vertical_spacing=0.08
+    )
+
+    # ---- (1) Preço + MM ----
+    fig.add_trace(
+        go.Scatter(
+            x=base["x"], y=base["y"], mode="lines",
+            name="Preço (close)", line=dict(width=1.1, color=price_color),
+            hovertemplate="%{x|%d/%m/%Y}<br>Preço: %{y:.2f}<extra></extra>"
+        ),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=base["x"], y=ma, mode="lines",
+            name=f"Média Móvel ({ma_window}d)", line=dict(width=1.4, dash="dash", color=ma_color),
+            hovertemplate="%{x|%d/%m/%Y}<br>MM: %{y:.2f}<extra></extra>"
+        ),
+        row=1, col=1
+    )
+
+    # Bollinger opcional
+    if show_bollinger:
+        m = base["y"].rolling(bands_window, min_periods=bands_window).mean()
+        s = base["y"].rolling(bands_window, min_periods=bands_window).std()
+        upper = m + bands_sigma * s
+        lower = m - bands_sigma * s
+
+        # bordas
+        fig.add_trace(
+            go.Scatter(x=base["x"], y=upper, mode="lines",
+                       line=dict(width=0.9, color=price_color, dash="dot"),
+                       name=f"Bollinger ({bands_window}, {bands_sigma}σ)"),
+            row=1, col=1
+        )
+        fig.add_trace(
+            go.Scatter(x=base["x"], y=lower, mode="lines",
+                       line=dict(width=0.9, color=price_color, dash="dot"),
+                       showlegend=False, fill="tonexty", opacity=0.12),
+            row=1, col=1
+        )
+
+    # linhas horizontais de máx/mín + pontos anotados
+    fig.add_hline(y=y_max, line_dash="dot", line_width=1.2,
+                  annotation_text=f"Máx {y_max:.2f}", annotation_position="top left",
+                  row=1, col=1)
+    fig.add_hline(y=y_min, line_dash="dot", line_width=1.2,
+                  annotation_text=f"Mín {y_min:.2f}", annotation_position="bottom left",
+                  row=1, col=1)
+
+    fig.add_trace(
+        go.Scatter(x=[x_max], y=[y_max], mode="markers+text",
+                   text=[f"{y_max:.2f}"], textposition="top center",
+                   marker=dict(size=8, color=price_color), showlegend=False),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=[x_min], y=[y_min], mode="markers+text",
+                   text=[f"{y_min:.2f}"], textposition="bottom center",
+                   marker=dict(size=8, color=price_color), showlegend=False),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=[x_last], y=[y_last], mode="markers+text",
+                   text=[f"{y_last:.2f}"], textposition="middle right",
+                   marker=dict(size=7, color=price_color), showlegend=False),
+        row=1, col=1
+    )
+
+    # ---- (2) RSI ----
+    # faixas 70/50/30
+    fig.add_hrect(y0=70, y1=100, line_width=0, fillcolor="red", opacity=0.08, row=2, col=1)
+    fig.add_hrect(y0=0, y1=30, line_width=0, fillcolor="green", opacity=0.08, row=2, col=1)
+    fig.add_hline(y=70, line_dash="dash", line_width=1.0, line_color="#E57373", row=2, col=1)
+    fig.add_hline(y=50, line_dash="dash", line_width=1.0, line_color="#9E9E9E", row=2, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_width=1.0, line_color="#81C784", row=2, col=1)
+
+    # baseline 50 para preencher até o RSI
+    fig.add_trace(
+        go.Scatter(x=data[date_col], y=[50]*len(data), mode="lines",
+                   line=dict(width=0), hoverinfo="skip", showlegend=False),
+        row=2, col=1
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=data[date_col], y=rsi_series, mode="lines",
+            name="RSI", line=dict(width=1.6, color=rsi_color),
+            fill="tonexty", fillcolor="rgba(84,110,122,0.07)",
+            hovertemplate="%{x|%d/%m/%Y}<br>RSI: %{y:.1f}<extra></extra>"
+        ),
+        row=2, col=1
+    )
+    fig.update_yaxes(range=[0, 100], title_text="RSI", row=2, col=1)
+
+    # ---- layout / interações ----
+    fig.update_layout(
+        template="plotly_dark",
+        height=620,
+        margin=dict(l=40, r=20, t=60, b=30),
+        title=title,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    fig.update_yaxes(title_text="Preço", row=1, col=1)
+
+    # botões de período; rangeslider desligado (fica poluído no dark)
+    fig.update_xaxes(
+        rangeselector=dict(
+            buttons=[
+                dict(count=1, label="1m", step="month", stepmode="backward"),
+                dict(count=3, label="3m", step="month", stepmode="backward"),
+                dict(count=6, label="6m", step="month", stepmode="backward"),
+                dict(count=1, label="YTD", step="year", stepmode="todate"),
+                dict(count=1, label="1y", step="year", stepmode="backward"),
+                dict(step="all"),
+            ]
+        ),
+        rangeslider=dict(visible=False),
+        showspikes=True, spikemode="across", spikesnap="cursor",
+        row=2, col=1
+    )
+
+    return fig
