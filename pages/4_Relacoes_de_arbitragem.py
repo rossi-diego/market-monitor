@@ -7,7 +7,7 @@ import matplotlib.dates as mdates
 import numpy as np
 import pandas as pd
 import streamlit as st
-from src.utils import rsi, plot_ratio_std
+from src.utils import rsi, plot_ratio_std, plot_ratio_std_plotly
 from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel, oleo_quote, oleo_flat_usd
 
 base="dark"
@@ -132,15 +132,15 @@ else:
         if len(yf) == 0:
             st.info("Sem dados no período selecionado.")
         else:
-            fig = plot_ratio_std(xf, yf, title="Relação Óleo/Farelo", ylabel="Relação Óleo/Farelo")
-            st.pyplot(fig)
+            fig = plot_ratio_std_plotly(xf, yf, title="Relação Óleo/Farelo", ylabel="Relação Óleo/Farelo")
+            st.plotly_chart(fig, use_container_width=True)
 
     elif st.session_state["plot"] == "op":
         xf, yf = filter_by_date(x_op, y_op, start_date, end_date)
         if len(yf) == 0:
             st.info("Sem dados no período selecionado.")
         else:
-            fig = plot_ratio_std(xf, yf, title="Relação Óleo/Palma", ylabel="Relação Óleo/Palma")
+            fig = plot_ratio_std_plotly(xf, yf, title="Relação Óleo/Palma", ylabel="Relação Óleo/Palma")
             st.pyplot(fig)
 
     elif st.session_state["plot"] == "od":
@@ -148,7 +148,7 @@ else:
         if len(yf) == 0:
             st.info("Sem dados no período selecionado.")
         else:
-            fig = plot_ratio_std(xf, yf, title="Relação Óleo/Diesel", ylabel="Óleo/Diesel")
+            fig = plot_ratio_std_plotly(xf, yf, title="Relação Óleo/Diesel", ylabel="Óleo/Diesel")
             st.pyplot(fig)
     else:
         st.info("Clique em um dos botões para exibir o gráfico.")

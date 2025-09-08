@@ -2,6 +2,8 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 def rsi(df, ticker_col, date_col='date', window=14):
     df = df.copy()
@@ -65,6 +67,122 @@ def plot_ratio_std(x, y, title="", ylabel="", rolling_window=90, label_series="S
     ax2.legend(loc='upper left')
 
     fig.autofmt_xdate()
+    return fig
+
+def plot_ratio_std_plotly(
+    x: pd.Series,
+    y: pd.Series,
+    title: str = "",
+    ylabel: str = "",
+    rolling_window: int = 90,
+    label_series: str = "Série",
+):
+    # --- prepara dados (ordena por data e garante numérico) ---
+    x = pd.to_datetime(pd.Series(x), errors="coerce")
+    y = pd.to_numeric(pd.Series(y), errors="coerce")
+    df = pd.DataFrame({"x": x, "y": y}).dropna().sort_values("x")
+    if df.shape[0] < 2:
+        # Retorna uma figura vazia amigável
+        fig = go.Figure()
+        fig.update_layout(title="Poucos pontos para plotar", template="plotly_dark", height=420)
+        return fig
+
+    # --- estatísticas e janelas móveis ---
+    minp = max(2, rolling_window // 4)
+    y_roll_mean = df["y"].rolling(rolling_window, min_periods=minp).mean()
+    y_roll_std  = df["y"].rolling(rolling_window, min_periods=minp).std()
+
+    idx_max = df["y"].idxmax()
+    idx_min = df["y"].idxmin()
+    x_max, y_max = df.loc[idx_max, "x"], df.loc[idx_max, "y"]
+    x_min, y_min = df.loc[idx_min, "x"], df.loc[idx_min, "y"]
+    x_last, y_last = df["x"].iloc[-1], df["y"].iloc[-1]
+
+    # --- figura com 2 subplots sincronizados ---
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        row_heights=[0.72, 0.28], vertical_spacing=0.08
+    )
+
+    # Série principal
+    fig.add_trace(
+        go.Scatter(
+            x=df["x"], y=df["y"], mode="lines", name=label_series,
+            hovertemplate="%{x|%d/%m/%Y}<br>Valor: %{y:.2f}<extra></extra>"
+        ),
+        row=1, col=1
+    )
+    # Média móvel
+    fig.add_trace(
+        go.Scatter(
+            x=df["x"], y=y_roll_mean, mode="lines",
+            name=f"Média Móvel ({rolling_window}d)",
+            line=dict(dash="dash"),
+            hovertemplate="%{x|%d/%m/%Y}<br>Média: %{y:.2f}<extra></extra>"
+        ),
+        row=1, col=1
+    )
+
+    # Linhas horizontais de Máx/Mín
+    fig.add_hline(y=y_max, line_dash="dot", line_width=1.5,
+                  annotation_text=f"Máx {y_max:.2f}", annotation_position="top left",
+                  row=1, col=1)
+    fig.add_hline(y=y_min, line_dash="dot", line_width=1.5,
+                  annotation_text=f"Mín {y_min:.2f}", annotation_position="bottom left",
+                  row=1, col=1)
+
+    # Marcadores com texto (máx/mín/último)
+    fig.add_trace(go.Scatter(x=[x_max], y=[y_max], mode="markers+text",
+                             text=[f"{y_max:.2f}"], textposition="top center",
+                             name="Máx", showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=[x_min], y=[y_min], mode="markers+text",
+                             text=[f"{y_min:.2f}"], textposition="bottom center",
+                             name="Mín", showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=[x_last], y=[y_last], mode="markers+text",
+                             text=[f"{y_last:.2f}"], textposition="top center",
+                             name="Último", showlegend=False), row=1, col=1)
+
+    # Subplot 2: Rolling STD
+    fig.add_trace(
+        go.Scatter(
+            x=df["x"], y=y_roll_std, mode="lines",
+            name=f"Desvio Padrão ({rolling_window}d)",
+            hovertemplate="%{x|%d/%m/%Y}<br>STD: %{y:.2f}<extra></extra>"
+        ),
+        row=2, col=1
+    )
+
+    # Layout dark-friendly + interações
+    fig.update_layout(
+        template="plotly_dark",
+        height=560,
+        margin=dict(l=40, r=20, t=60, b=30),
+        title=title or "Relação",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    fig.update_yaxes(title_text=ylabel or "Valor", row=1, col=1)
+    fig.update_yaxes(title_text="Rolling STD", row=2, col=1)
+
+    # Range selector + slider no eixo X inferior
+    fig.update_xaxes(
+        rangeselector=dict(
+            buttons=[
+                dict(count=1, label="1m", step="month", stepmode="backward"),
+                dict(count=3, label="3m", step="month", stepmode="backward"),
+                dict(count=6, label="6m", step="month", stepmode="backward"),
+                dict(count=1, label="YTD", step="year", stepmode="todate"),
+                dict(count=1, label="1y", step="year", stepmode="backward"),
+                dict(step="all"),
+            ]
+        ),
+        rangeslider_visible=True,
+        showspikes=True, spikemode="across", spikesnap="cursor",
+        row=2, col=1
+    )
+
     return fig
 
 def plot_price_rsi(
