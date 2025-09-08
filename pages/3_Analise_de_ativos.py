@@ -220,4 +220,14 @@ else:
         bands_window=20,
         bands_sigma=2.0,
     )
+    
+    fig.update_layout(
+    title=dict(
+        text=CLOSE.upper(),
+        x=0.0, xanchor="left",          # (opcional) alinhar à esquerda
+        y=0.98, yanchor="top",
+        pad=dict(b=12)                  # <<< GAP (px) entre título e gráfico
+    ),
+    margin=dict(t=80)                   # (opcional) mais “teto” do figure
+)
     st.plotly_chart(fig, use_container_width=True)
