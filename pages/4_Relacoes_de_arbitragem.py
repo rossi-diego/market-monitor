@@ -49,7 +49,7 @@ x_od = oleo_diesel['date']; y_od = oleo_diesel['oleo/diesel']
 # ============================================================
 # UI State (qual gráfico exibir)
 # ============================================================
-section("📊 Selecione o ratio")
+section("📊 Selecione o ratio (o ratio é aplicado após converter cada commodity para usd/ton)")
 
 if "plot" not in st.session_state:
     st.session_state["plot"] = None
@@ -141,7 +141,7 @@ else:
             st.info("Sem dados no período selecionado.")
         else:
             fig = plot_ratio_std_plotly(xf, yf, title="Relação Óleo/Palma", ylabel="Relação Óleo/Palma")
-            st.pyplot(fig)
+            st.plotly_chart(fig, use_container_width=True)
 
     elif st.session_state["plot"] == "od":
         xf, yf = filter_by_date(x_od, y_od, start_date, end_date)
@@ -149,6 +149,6 @@ else:
             st.info("Sem dados no período selecionado.")
         else:
             fig = plot_ratio_std_plotly(xf, yf, title="Relação Óleo/Diesel", ylabel="Óleo/Diesel")
-            st.pyplot(fig)
+            st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Clique em um dos botões para exibir o gráfico.")

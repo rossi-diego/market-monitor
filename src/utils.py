@@ -178,7 +178,7 @@ def plot_ratio_std_plotly(
                 dict(step="all"),
             ]
         ),
-        rangeslider_visible=True,
+        rangeslider_visible=False,
         showspikes=True, spikemode="across", spikesnap="cursor",
         row=2, col=1
     )
