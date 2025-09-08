@@ -168,58 +168,89 @@ def _resolve_cols(df, cols, label_map=None):
     missing = [c for c in cols if label_map.get(c, c) not in df.columns]
     return available, missing
 
-def compute_corr(df, cols, method: str, label_map=None):
-    # resolve seleção de colunas com tolerância a rótulos/ausências
-    cols_ok, missing = _resolve_cols(df, cols, label_map=label_map)
-
-    # alerta amigável sobre colunas ausentes
-    if missing:
-        st.warning(
-            f"As seguintes colunas não foram encontradas e serão ignoradas: {', '.join(map(str, missing))}"
-        )
-
-    if len(cols_ok) < 2:
-        st.info("Seleção insuficiente (precisa de pelo menos 2 colunas após saneamento).")
+# ============================================================
+# Correlação robusta usando df_heatmap (com FE), com filtro de período dentro
+# ============================================================
+def compute_corr(
+    df_base: pd.DataFrame,
+    cols_in: list[str],
+    method: str,
+    start_date: dt.date,
+    end_date: dt.date,
+):
+    # 1) filtro de período diretamente no df_heatmap (preserva FE)
+    if "date" not in df_base.columns:
+        st.error("Coluna 'date' não encontrada no DataFrame base.")
         st.stop()
 
-    # mantém apenas numéricas e lida com coerção
-    df_num = df_heatmap[cols_ok].apply(pd.to_numeric, errors="coerce")
+    df_period = df_base.loc[
+        (df_base["date"].dt.date >= start_date) & (df_base["date"].dt.date <= end_date),
+        cols_in
+    ].copy()
 
-    # remove colunas constantes (Kendall falha com variância zero)
+    # 2) saneia seleção (evita KeyError caso alguma coluna não exista)
+    cols_ok = [c for c in cols_in if c in df_period.columns]
+    missing = [c for c in cols_in if c not in df_period.columns]
+    if missing:
+        st.warning(f"Colunas não encontradas e ignoradas: {', '.join(map(str, missing))}")
+    if len(cols_ok) < 2:
+        st.info("Selecione ao menos 2 colunas válidas para a correlação.")
+        st.stop()
+
+    # 3) coagir para numérico + dropna apenas no subset
+    df_num = df_period[cols_ok].apply(pd.to_numeric, errors="coerce").dropna(how="any")
+    if df_num.shape[0] < 2:
+        st.info("Sem amostras suficientes no período após remover valores ausentes.")
+        st.stop()
+
+    # 4) remover colunas constantes (Kendall não aceita variância zero)
     nun = df_num.nunique(dropna=True)
     if (nun <= 1).any():
         dropped = nun[nun <= 1].index.tolist()
         df_num = df_num.loc[:, nun > 1]
         st.warning(f"Colunas sem variabilidade removidas: {', '.join(dropped)}")
-
     if df_num.shape[1] < 2:
         st.info("Após remover colunas constantes, restaram menos de 2 colunas.")
         st.stop()
 
-    method = method.lower()
-    if method == "kendall":
+    m = method.lower()
+    if m != "kendall":
+        # Pearson / Spearman direto do pandas
+        return df_num.corr(method=m)
+
+    # 5) Kendall robusto (pairwise dropna + try/except)
+    cols_ = df_num.columns.tolist()
+    try:
         from scipy.stats import kendalltau
-        cols_ = df_num.columns.tolist()
-        m = np.eye(len(cols_), dtype=float)
-        for i in range(len(cols_)):
-            for j in range(i + 1, len(cols_)):
-                tau, _ = kendalltau(
-                    df_num.iloc[:, i], df_num.iloc[:, j], nan_policy="omit"
-                )
-                m[i, j] = m[j, i] = tau if np.isfinite(tau) else np.nan
-        return pd.DataFrame(m, index=cols_, columns=cols_)
-    else:
-        return df_num.corr(method=method)
+        n = len(cols_)
+        M = np.eye(n, dtype=float)
+        for i in range(n):
+            xi = df_num.iloc[:, i]
+            for j in range(i + 1, n):
+                xj = df_num.iloc[:, j]
+                pair = pd.concat([xi, xj], axis=1).dropna()
+                if pair.shape[0] < 2:
+                    tau = np.nan
+                else:
+                    try:
+                        tau, _ = kendalltau(pair.iloc[:, 0], pair.iloc[:, 1], nan_policy="omit")
+                    except Exception:
+                        tau = np.nan
+                M[i, j] = M[j, i] = tau if np.isfinite(tau) else np.nan
+        return pd.DataFrame(M, index=cols_, columns=cols_)
+    except Exception:
+        # fallback seguro (pandas) caso SciPy não esteja disponível
+        return df_num.corr(method="kendall")
 
-# -------------------------
-# Uso (troque sua chamada)
-# -------------------------
-# Se você tiver um mapeamento de rótulos da UI -> nome real da coluna, passe aqui:
-# ex.: label_map = {"Preço (CBOT)": "cbot_price", "Dólar": "usd_brl"}
-label_map = None  # ou seu dicionário
-
-corr = compute_corr(df_heatmap, cols_selected, method, label_map=label_map)
-labels_selected = list(corr.columns)  # re-alinha rótulos após drops
+# -------- CHAMADA (usa df_heatmap como fonte, sem df_sel intermediário) --------
+corr = compute_corr(
+    df_base=df_heatmap,
+    cols_in=[AVAILABLE[lbl] for lbl in labels_selected],
+    method=method,
+    start_date=start_date,
+    end_date=end_date,
+)
+labels_selected = list(corr.columns)
 n = len(labels_selected)
 
 # --- se sobrar 0 ou 1 coluna, evita plot vazio/degenerado ---
