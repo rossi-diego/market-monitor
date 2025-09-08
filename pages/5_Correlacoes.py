@@ -154,36 +154,72 @@ def adapt_font(base, n, step=0.18, floor=6):
     return max(floor, int(round(base - step * max(0, n - 10))))
 
 # --- prepara correlação robusta (inclui Kendall confiável) ---
-def compute_corr(df, cols, method: str):
+def _resolve_cols(df, cols, label_map=None):
+    """
+    Converte rótulos de UI -> nomes reais (via label_map) e
+    mantém apenas colunas existentes no df.
+    """
+    if label_map is None:
+        label_map = {}
+    # mapeia possíveis rótulos amigáveis para nomes reais
+    mapped = [label_map.get(c, c) for c in cols]
+    # interseção com as colunas do df
+    available = [c for c in mapped if c in df.columns]
+    missing = [c for c in cols if label_map.get(c, c) not in df.columns]
+    return available, missing
+
+def compute_corr(df, cols, method: str, label_map=None):
+    # resolve seleção de colunas com tolerância a rótulos/ausências
+    cols_ok, missing = _resolve_cols(df, cols, label_map=label_map)
+
+    # alerta amigável sobre colunas ausentes
+    if missing:
+        st.warning(
+            f"As seguintes colunas não foram encontradas e serão ignoradas: {', '.join(map(str, missing))}"
+        )
+
+    if len(cols_ok) < 2:
+        st.info("Seleção insuficiente (precisa de pelo menos 2 colunas após saneamento).")
+        st.stop()
+
     # mantém apenas numéricas e lida com coerção
-    df_num = df[cols].apply(pd.to_numeric, errors="coerce")
+    df_num = df[cols_ok].apply(pd.to_numeric, errors="coerce")
 
     # remove colunas constantes (Kendall falha com variância zero)
-    df_num = df_num.loc[:, df_num.nunique(dropna=True) > 1]
+    nun = df_num.nunique(dropna=True)
+    if (nun <= 1).any():
+        dropped = nun[nun <= 1].index.tolist()
+        df_num = df_num.loc[:, nun > 1]
+        st.warning(f"Colunas sem variabilidade removidas: {', '.join(dropped)}")
 
-    if df_num.shape[1] == 0:
-        return pd.DataFrame([], columns=[], index=[])
+    if df_num.shape[1] < 2:
+        st.info("Após remover colunas constantes, restaram menos de 2 colunas.")
+        st.stop()
 
-    if method.lower() == "kendall":
-        # cálculo par-a-par com scipy, tolerante a NaN
+    method = method.lower()
+    if method == "kendall":
         from scipy.stats import kendalltau
         cols_ = df_num.columns.tolist()
-        m = np.eye(len(cols_))
+        m = np.eye(len(cols_), dtype=float)
         for i in range(len(cols_)):
             for j in range(i + 1, len(cols_)):
                 tau, _ = kendalltau(
-                    df_num.iloc[:, i],
-                    df_num.iloc[:, j],
-                    nan_policy="omit"
+                    df_num.iloc[:, i], df_num.iloc[:, j], nan_policy="omit"
                 )
                 m[i, j] = m[j, i] = tau if np.isfinite(tau) else np.nan
         return pd.DataFrame(m, index=cols_, columns=cols_)
     else:
-        return df_num.corr(method=method.lower())
+        return df_num.corr(method=method)
 
-# --- calcula correlação ---
-corr = compute_corr(df, cols_selected, method)
-labels_selected = list(corr.columns)  # re-alinha rótulos após eventuais drops
+# -------------------------
+# Uso (troque sua chamada)
+# -------------------------
+# Se você tiver um mapeamento de rótulos da UI -> nome real da coluna, passe aqui:
+# ex.: label_map = {"Preço (CBOT)": "cbot_price", "Dólar": "usd_brl"}
+label_map = None  # ou seu dicionário
+
+corr = compute_corr(df, cols_selected, method, label_map=label_map)
+labels_selected = list(corr.columns)  # re-alinha rótulos após drops
 n = len(labels_selected)
 
 # --- se sobrar 0 ou 1 coluna, evita plot vazio/degenerado ---
