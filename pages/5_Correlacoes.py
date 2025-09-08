@@ -183,7 +183,7 @@ def compute_corr(df, cols, method: str, label_map=None):
         st.stop()
 
     # mantém apenas numéricas e lida com coerção
-    df_num = df[cols_ok].apply(pd.to_numeric, errors="coerce")
+    df_num = df_heatmap[cols_ok].apply(pd.to_numeric, errors="coerce")
 
     # remove colunas constantes (Kendall falha com variância zero)
     nun = df_num.nunique(dropna=True)
@@ -218,7 +218,7 @@ def compute_corr(df, cols, method: str, label_map=None):
 # ex.: label_map = {"Preço (CBOT)": "cbot_price", "Dólar": "usd_brl"}
 label_map = None  # ou seu dicionário
 
-corr = compute_corr(df, cols_selected, method, label_map=label_map)
+corr = compute_corr(df_heatmap, cols_selected, method, label_map=label_map)
 labels_selected = list(corr.columns)  # re-alinha rótulos após drops
 n = len(labels_selected)
 
