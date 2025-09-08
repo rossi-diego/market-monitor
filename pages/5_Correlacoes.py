@@ -133,51 +133,109 @@ corr = df_sel[cols_selected].corr(method=method)
 # ============================================================
 # Heatmap
 # ============================================================
-# --- controles de tamanho ---
-size_opt = st.radio("Tamanho do heatmap", ["Pequeno", "Médio", "Grande"],
-                    index=1, horizontal=True)
-scale = {"Pequeno": 0.4, "Médio": 0.6, "Grande": 0.8}[size_opt]
-
-# dimensões proporcionais ao nº de variáveis
-n = len(cols_selected)
-cell_w = 0.85 * scale   # largura por célula
-cell_h = 0.60 * scale   # altura por célula (menor para ficar mais compacto)
-fig_w = max(6, min(cell_w * n + 3, 18))
-fig_h = max(4, min(cell_h * n + 3, 14))
-
-fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=110)
-sns.set_theme(style="white")
-
-mask = np.triu(np.ones_like(corr, dtype=bool)) if mask_upper else None
-
-sns.heatmap(
-    corr,
-    annot=show_annot,
-    fmt=".2f",
-    vmin=-1, vmax=1,
-    cmap="RdYlBu_r",
-    square=False,
-    linewidths=0.5,
-    mask=mask,
-    annot_kws={"size": 8},
-    cbar_kws={"shrink": 0.7},
-    ax=ax
+# --- presets de tamanho (mais agressivos) ---
+size_opt = st.radio(
+    "Tamanho do heatmap",
+    ["Pequeno", "Médio", "Grande"],
+    index=1,
+    horizontal=True
 )
 
-ax.set_title(f"Matriz de Correlação ({method.title()}) — {start_date} → {end_date}",
-             fontsize=14, pad=10)
-ax.set_xticklabels(labels_selected, rotation=45, ha="right")
-ax.set_yticklabels(labels_selected, rotation=0)
-ax.tick_params(labelsize=9)
+SIZE_PRESETS = {
+    "Pequeno": dict(scale=0.28, annot=6, tick=7,  title=12, cbar=0.55),
+    "Médio":   dict(scale=0.45, annot=8, tick=9,  title=14, cbar=0.65),
+    "Grande":  dict(scale=0.70, annot=10, tick=11, title=16, cbar=0.75),
+}
+P = SIZE_PRESETS[size_opt]
 
-# fundo transparente + textos claros (dark theme)
-fig.patch.set_alpha(0); ax.set_facecolor((0,0,0,0))
-for item in [ax.title, ax.xaxis.label, ax.yaxis.label]:
-    item.set_color("#e6e6e6")
-ax.tick_params(colors="#e6e6e6")
+# --- util p/ fontes adaptarem ao nº de variáveis ---
+def adapt_font(base, n, step=0.18, floor=6):
+    """Diminui a fonte quanto maior o n; nunca abaixo de 'floor'."""
+    return max(floor, int(round(base - step * max(0, n - 10))))
 
-# NÃO estica para a largura total
-st.pyplot(fig, use_container_width=False)
+# --- prepara correlação robusta (inclui Kendall confiável) ---
+def compute_corr(df, cols, method: str):
+    # mantém apenas numéricas e lida com coerção
+    df_num = df[cols].apply(pd.to_numeric, errors="coerce")
+
+    # remove colunas constantes (Kendall falha com variância zero)
+    df_num = df_num.loc[:, df_num.nunique(dropna=True) > 1]
+
+    if df_num.shape[1] == 0:
+        return pd.DataFrame([], columns=[], index=[])
+
+    if method.lower() == "kendall":
+        # cálculo par-a-par com scipy, tolerante a NaN
+        from scipy.stats import kendalltau
+        cols_ = df_num.columns.tolist()
+        m = np.eye(len(cols_))
+        for i in range(len(cols_)):
+            for j in range(i + 1, len(cols_)):
+                tau, _ = kendalltau(
+                    df_num.iloc[:, i],
+                    df_num.iloc[:, j],
+                    nan_policy="omit"
+                )
+                m[i, j] = m[j, i] = tau if np.isfinite(tau) else np.nan
+        return pd.DataFrame(m, index=cols_, columns=cols_)
+    else:
+        return df_num.corr(method=method.lower())
+
+# --- calcula correlação ---
+corr = compute_corr(df, cols_selected, method)
+labels_selected = list(corr.columns)  # re-alinha rótulos após eventuais drops
+n = len(labels_selected)
+
+# --- se sobrar 0 ou 1 coluna, evita plot vazio/degenerado ---
+if n <= 1:
+    st.info("Seleção insuficiente para matriz de correlação.")
+else:
+    # dimensões proporcionais ao nº de variáveis (mais compactas)
+    cell_w = 0.60 * P["scale"]   # largura por célula
+    cell_h = 0.45 * P["scale"]   # altura por célula
+    fig_w = max(4, min(cell_w * n + 2.2, 14))  # limites mais contidos
+    fig_h = max(3, min(cell_h * n + 2.0, 10))
+
+    # fontes adaptadas
+    annot_size = adapt_font(P["annot"], n)
+    tick_size  = adapt_font(P["tick"],  n)
+    title_size = adapt_font(P["title"], n, step=0.12)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=110)
+    sns.set_theme(style="white")
+
+    mask = np.triu(np.ones_like(corr, dtype=bool)) if mask_upper else None
+
+    sns.heatmap(
+        corr,
+        annot=show_annot,
+        fmt=".2f",
+        vmin=-1, vmax=1,
+        cmap="RdYlBu_r",
+        square=False,
+        linewidths=0.4 if size_opt == "Pequeno" else 0.5,
+        linecolor="white",
+        mask=mask,
+        annot_kws={"size": annot_size},
+        cbar_kws={"shrink": P["cbar"]},
+        ax=ax
+    )
+
+    ax.set_title(
+        f"Matriz de Correlação ({method.title()}) — {start_date} → {end_date}",
+        fontsize=title_size, pad=8
+    )
+    ax.set_xticklabels(labels_selected, rotation=45, ha="right", fontsize=tick_size)
+    ax.set_yticklabels(labels_selected, rotation=0, fontsize=tick_size)
+
+    # fundo transparente + textos claros (dark theme)
+    fig.patch.set_alpha(0); ax.set_facecolor((0,0,0,0))
+    for item in [ax.title, ax.xaxis.label, ax.yaxis.label]:
+        item.set_color("#e6e6e6")
+    ax.tick_params(colors="#e6e6e6", labelsize=tick_size)
+
+    # NÃO esticar
+    st.pyplot(fig, use_container_width=False)
 
 # ============================================================
 # Extras: baixar CSV e ver a tabela
