@@ -448,23 +448,32 @@ def plot_price_rsi_plotly(
 
     # ---- (2) RSI ----
     # faixas 70/50/30
-    fig.add_hrect(y0=70, y1=100, line_width=0, fillcolor="red", opacity=0.08, row=2, col=1)
-    fig.add_hrect(y0=0, y1=30, line_width=0, fillcolor="green", opacity=0.08, row=2, col=1)
+    # ---- (2) RSI ----
+    # desenha faixas como "shapes" no domínio do subplot 2 (x2) e eixo y2
+    fig.update_yaxes(range=[0, 100], title_text="RSI", row=2, col=1)
+
+    fig.add_shape(
+        type="rect", xref="x2 domain", yref="y2",
+        x0=0, x1=1, y0=70, y1=100,
+        fillcolor="rgba(229,115,115,0.20)", line_width=0, layer="below"
+    )
+    fig.add_shape(
+        type="rect", xref="x2 domain", yref="y2",
+        x0=0, x1=1, y0=0, y1=30,
+        fillcolor="rgba(129,199,132,0.20)", line_width=0, layer="below"
+    )
+
+    # linhas 70/50/30
     fig.add_hline(y=70, line_dash="dash", line_width=1.0, line_color="#E57373", row=2, col=1)
     fig.add_hline(y=50, line_dash="dash", line_width=1.0, line_color="#9E9E9E", row=2, col=1)
     fig.add_hline(y=30, line_dash="dash", line_width=1.0, line_color="#81C784", row=2, col=1)
 
-    # baseline 50 para preencher até o RSI
-    fig.add_trace(
-        go.Scatter(x=data[date_col], y=[50]*len(data), mode="lines",
-                   line=dict(width=0), hoverinfo="skip", showlegend=False),
-        row=2, col=1
-    )
+    # curva do RSI (se quiser manter o preenchimento, reduza a opacidade para não “tampar” as faixas)
     fig.add_trace(
         go.Scatter(
             x=data[date_col], y=rsi_series, mode="lines",
             name="RSI", line=dict(width=1.6, color=rsi_color),
-            fill="tonexty", fillcolor="rgba(84,110,122,0.07)",
+            fill="tonexty", fillcolor="rgba(84,110,122,0.06)",  # bem sutil
             hovertemplate="%{x|%d/%m/%Y}<br>RSI: %{y:.1f}<extra></extra>"
         ),
         row=2, col=1
