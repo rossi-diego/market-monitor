@@ -95,7 +95,7 @@ with c3:
 # seleção de variáveis (multi)
 section("Variáveis", "Selecione as séries para a correlação", "🧩")
 labels_sorted = sorted(AVAILABLE.keys())
-default_sel = [lbl for lbl in labels_sorted if AVAILABLE[lbl] in ["boc1","smc1","sc1","lcoc1","hoc1","brl="] and lbl in labels_sorted] or labels_sorted[:8]
+default_sel = [lbl for lbl in labels_sorted if AVAILABLE[lbl] in ["oleo_flat_brl", "fcpoc1"] and lbl in labels_sorted] or labels_sorted[:8]
 labels_selected = st.multiselect(
     "Séries (mín. 2)",
     options=labels_sorted,
@@ -136,7 +136,7 @@ corr = df_sel[cols_selected].corr(method=method)
 # --- controles de tamanho ---
 size_opt = st.radio("Tamanho do heatmap", ["Pequeno", "Médio", "Grande"],
                     index=1, horizontal=True)
-scale = {"Pequeno": 0.8, "Médio": 1.0, "Grande": 1.2}[size_opt]
+scale = {"Pequeno": 0.4, "Médio": 0.6, "Grande": 0.8}[size_opt]
 
 # dimensões proporcionais ao nº de variáveis
 n = len(cols_selected)
@@ -156,11 +156,11 @@ sns.heatmap(
     fmt=".2f",
     vmin=-1, vmax=1,
     cmap="RdYlBu_r",
-    square=False,                 # <<< menos alto que square=True
+    square=False,
     linewidths=0.5,
     mask=mask,
-    annot_kws={"size": 8},        # <<< números menores
-    cbar_kws={"shrink": 0.7},     # <<< barra de cor menor
+    annot_kws={"size": 8},
+    cbar_kws={"shrink": 0.7},
     ax=ax
 )
 
