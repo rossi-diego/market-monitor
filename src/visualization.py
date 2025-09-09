@@ -289,6 +289,11 @@ def plot_price_rsi_plt(
     ax2.xaxis.set_major_locator(locator)
     ax2.xaxis.set_major_formatter(formatter)
 
+    fig.update_layout(
+    title=dict(text=CLOSE.upper(), x=0.0, xanchor="left", y=0.98, yanchor="top", pad=dict(b=12)),
+    margin=dict(t=80)
+    )
+
     return fig
 
 
