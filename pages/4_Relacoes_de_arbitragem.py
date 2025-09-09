@@ -18,7 +18,7 @@ RATIOS = {
     "Óleo/Farelo": (oleo_farelo, "oleo/farelo"),
     "Óleo/Palma":  (oleo_palma,  "oleo/palma"),
     "Óleo/Diesel": (oleo_diesel, "oleo/diesel"),
-    "Oil Share CME": (oil_share, "oil share"),    
+    "Oil Share CME": (oil_share, "oil_share"),    
 }
 
 # ============================================================
