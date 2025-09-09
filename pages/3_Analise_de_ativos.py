@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 # --- Local project
-from src.data_pipeline import df, oleo_quote
+from src.data_pipeline import df
 from src.visualization import plot_price_rsi_plt, plot_price_rsi_plotly
 from src.utils import apply_theme, section, rsi
 
@@ -19,18 +19,9 @@ from src.utils import apply_theme, section, rsi
 apply_theme()
 
 # ============================================================
-# Flats
-# ============================================================
-# Flat USD óleo
-df['oleo_flat_usd'] = (df['boc1'] + (df['so-premp-c1']/100)) * 22.0462
-df['oleo_flat_brl'] = (df['boc1'] + (df['so-premp-c1']/100)) * 22.0462 * df['brl=']
-df['farelo_flat_usd'] = (df['smc1'] + (df['sm-premp-c1']/100)) * 1.1023
-df['farelo_flat_brl'] = (df['smc1'] + (df['sm-premp-c1']/100)) * 1.1023 * df['brl=']
-
-# ============================================================
 # Base
 # ============================================================
-BASE = df.copy()  # ou oleo_quote
+BASE = df.copy()
 BASE["date"] = pd.to_datetime(BASE["date"], errors="coerce")
 
 # ============================================================
@@ -45,8 +36,8 @@ ASSETS_MAP = {
     "Flat do farelo de soja (BRL - C1)": "farelo_flat_brl",    
     "Flat do farelo de soja (USD - C1)": "farelo_flat_usd",
     "Farelo de soja (SMC1)": "smc1",
-    "Óleo – Prêmio C1": "so-premp-c1",
-    "Farelo – Prêmio C1": "sm-premp-c1",
+    "Óleo - Prêmio C1": "so-premp-c1",
+    "Farelo - Prêmio C1": "sm-premp-c1",
     "Soja (SC1)": "sc1",
     "Milho (CC1)": "cc1",    
     "RIN D4": "rin-d4-us",
@@ -54,7 +45,6 @@ ASSETS_MAP = {
     "Brent (LCOC1)": "lcoc1",
     "Heating Oil (HOC1)": "hoc1",
     "Dólar": "brl=",
-
 }
 
 # estado inicial (coluna real)
