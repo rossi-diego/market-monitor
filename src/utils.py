@@ -1,3 +1,4 @@
+import datetime as dt
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -52,3 +53,91 @@ def rsi(df, ticker_col, date_col='date', window=14):
 
     # Retornar apenas as colunas úteis
     return df[[date_col, ticker_col, 'RSI']]
+
+def available_assets(df, assets_map: dict[str, str]) -> dict[str, str]:
+    """Filtra o mapa exibindo só colunas que existem no df."""
+    return {label: col for label, col in assets_map.items() if col in df.columns}
+
+def asset_picker(df, assets_map: dict[str, str], state_key: str = "close_col", cols_per_row: int = 6):
+    """Renderiza botões em grade e retorna (code, assets_filtrados)."""
+    assets = available_assets(df, assets_map)
+    if not assets:
+        st.error("Nenhuma coluna disponível no DataFrame para os ativos configurados.")
+        st.stop()
+
+    # Estado inicial (default pra 'Óleo de soja (BOC1)' se existir; senão, 1ª opção)
+    if state_key not in st.session_state:
+        st.session_state[state_key] = assets.get("Óleo de soja (BOC1)", next(iter(assets.values())))
+
+    labels = list(assets.keys())
+    for i in range(0, len(labels), cols_per_row):
+        row = labels[i:i+cols_per_row]
+        cols = st.columns(len(row))
+        for label, col in zip(row, cols):
+            code = assets[label]
+            with col:
+                if st.button(
+                    label,
+                    key=f"btn_{code}",
+                    type=("primary" if code == st.session_state[state_key] else "secondary"),
+                    use_container_width=True,
+                ):
+                    st.session_state[state_key] = code
+
+    code = st.session_state[state_key]
+    # Mostra o rótulo atual
+    label_atual = next((k for k, v in assets.items() if v == code), code)
+    st.caption(f"Ativo selecionado: **{label_atual}**")
+    return code, assets
+
+def date_range_picker(dates, state_key: str = "range", default_days: int = 365, label_slider: str = "Datas disponíveis"):
+    """Presets + slider. Retorna (start_date, end_date) como date()."""
+    dates = dates.dropna()
+    if dates.empty:
+        st.warning("Sem datas válidas na base.")
+        st.stop()
+
+    gmin = dates.min().date()
+    gmax = dates.max().date()
+    default_start = max(gmin, (gmax - dt.timedelta(days=default_days)))
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        if st.button("1M", use_container_width=True):
+            st.session_state[state_key] = (gmax - dt.timedelta(days=30), gmax)
+    with c2:
+        if st.button("3M", use_container_width=True):
+            st.session_state[state_key] = (gmax - dt.timedelta(days=90), gmax)
+    with c3:
+        if st.button("6M", use_container_width=True):
+            st.session_state[state_key] = (gmax - dt.timedelta(days=180), gmax)
+    with c4:
+        if st.button("YTD", use_container_width=True):
+            st.session_state[state_key] = (dt.date(gmax.year, 1, 1), gmax)
+    with c5:
+        if st.button("Máx", use_container_width=True):
+            st.session_state[state_key] = (gmin, gmax)
+
+    if state_key in st.session_state:
+        default_start, default_end = st.session_state[state_key]
+    else:
+        default_start, default_end = default_start, gmax
+
+    start_date, end_date = st.slider(
+        label=label_slider,
+        min_value=gmin,
+        max_value=gmax,
+        value=(default_start, default_end),
+        step=dt.timedelta(days=1),
+    )
+    return start_date, end_date
+
+def ma_picker(options=(20, 50, 200), default: int = 90, state_key: str = "ma_window"):
+    """Escolha da média móvel via radio. Retorna o inteiro selecionado."""
+    opts = list(dict.fromkeys(list(options) + [default]))  # garante unicidade e inclui default
+    if state_key not in st.session_state:
+        st.session_state[state_key] = default
+    idx = opts.index(st.session_state[state_key]) if st.session_state[state_key] in opts else opts.index(default)
+    mm = st.radio("Média móvel", options=opts, index=idx, horizontal=True)
+    st.session_state[state_key] = mm
+    return mm
