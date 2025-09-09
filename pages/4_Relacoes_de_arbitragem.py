@@ -4,7 +4,7 @@
 import pandas as pd
 import streamlit as st
 
-from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel
+from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel, oil_share
 from src.visualization import plot_ratio_std_plotly
 from src.utils import apply_theme, section, date_range_picker
 
@@ -18,12 +18,13 @@ RATIOS = {
     "Óleo/Farelo": (oleo_farelo, "oleo/farelo"),
     "Óleo/Palma":  (oleo_palma,  "oleo/palma"),
     "Óleo/Diesel": (oleo_diesel, "oleo/diesel"),
+    "Oil Share CME": (oil_share, "oil share"),    
 }
 
 # ============================================================
 # Seleção do ratio
 # ============================================================
-section("Selecione o ratio", "Todos em USD/ton (C1), já convertidos no pipeline.", "📊")
+section("Selecione o ratio", "Todos em USD/ton (Future C1), já convertidos no pipeline, com exceção do Oil Share", "📊")
 ratio_label = st.radio("Ratio", options=list(RATIOS.keys()), horizontal=True)
 
 df_sel, y_col = RATIOS[ratio_label]

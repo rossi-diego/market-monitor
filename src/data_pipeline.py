@@ -107,6 +107,15 @@ def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         v["oleo/diesel"] = v["oleo_tons"] / v["diesel_tons"]
         views["oleo_diesel"] = v[["date", "oleo/diesel"]].sort_values("date")
 
+    # Oil Share CME
+    if {"boc1", "smc1"}.issubset(df.columns):
+        v = df[["date", "boc1", "smc1"]].dropna().copy()
+        v["oleo_revenue"]   = v["boc1"] * 0.11
+        v["farelo_revenue"] = v["smc1"] * 0.022
+        v["crushing_revenue"] = v["oleo_revenue"] + v["farelo_revenue"]
+        v["oil_share"] = v["oleo_revenue"] / v["crushing_revenue"]
+        views["oil_share"] = v[["date", "oil_share"]].sort_values("date")
+
 
     return views
 
@@ -126,3 +135,4 @@ df, _views  = load_all()
 oleo_farelo = _views.get("oleo_farelo")
 oleo_palma  = _views.get("oleo_palma")
 oleo_diesel = _views.get("oleo_diesel")
+oil_share = _views.get("oil_share")
