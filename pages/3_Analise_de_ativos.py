@@ -12,35 +12,11 @@ import streamlit as st
 
 # --- Local project
 from src.data_pipeline import df, oleo_quote
-from src.utils import plot_price_rsi, plot_price_rsi_plotly, rsi
+from src.visualization import plot_price_rsi, plot_price_rsi_plotly, rsi
+from src.utils import apply_theme, section
 
-# --- Theme (mantido, apenas padronizado como CONSTANTES)
-BASE = "dark"
-PRIMARY_COLOR = "#7aa2f7"
-BACKGROUND_COLOR = "#0E1117"
-SECONDARY_BACKGROUND_COLOR = "#161a23"
-TEXT_COLOR = "#e6e6e6"
-
-# ===== Estilo de títulos (dark-friendly) =====
-st.markdown("""
-<style>
-.mm-sec { margin: .8rem 0 .35rem; }
-.mm-sec .accent {
-  display:inline-block; padding:.35rem .7rem;
-  border-left:4px solid #7aa2f7; border-radius:8px;
-  background: rgba(122,162,247,.10); color:#e6e6e6;
-  font-weight:800; font-size:1.05rem; letter-spacing:.02em;
-}
-.mm-sub { color:#9aa0a6; font-size:.85rem; margin:.15rem 0 0; }
-</style>
-""", unsafe_allow_html=True)
-
-def section(text, subtitle=None, icon=""):
-    st.markdown(f'<div class="mm-sec"><span class="accent">{icon} {text}</span></div>', unsafe_allow_html=True)
-    if subtitle:
-        st.markdown(f'<div class="mm-sub">{subtitle}</div>', unsafe_allow_html=True)
-
-
+# --- Theme
+apply_theme()
 
 # ============================================================
 # Flats
