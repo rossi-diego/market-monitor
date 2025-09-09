@@ -53,7 +53,7 @@ def plot_ratio_std_plotly(
     ylabel: str = "",
     rolling_window: int = 90,
     label_series: str = "Série",
-):
+    ):
     # --- prepara dados (ordena por data e garante numérico) ---
     x = pd.to_datetime(pd.Series(x), errors="coerce")
     y = pd.to_numeric(pd.Series(y), errors="coerce")
@@ -181,7 +181,7 @@ def plot_ratio_std_plotly(
     bands_sigma=2.0,
     bands_color="#4A77FF",
     theme="transparent",
-):
+    ):
     """
     Figura com 2 subplots:
       (1) Preço (close) + MM(ma_window) + Máx/Mín/Último + (opcional) Bollinger (bands_window, bands_sigma)
@@ -309,7 +309,7 @@ def plot_price_rsi_plotly(
     show_bollinger: bool = False,
     bands_window: int = 20,
     bands_sigma: float = 2.0,
-):
+    ):
     data = df.copy()
     data[date_col] = pd.to_datetime(data[date_col], errors="coerce")
     data = data.sort_values(date_col)
