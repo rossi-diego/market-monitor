@@ -133,11 +133,19 @@ def date_range_picker(dates, state_key: str = "range", default_days: int = 365, 
     return start_date, end_date
 
 def ma_picker(options=(20, 50, 200), default: int = 90, state_key: str = "ma_window"):
-    """Escolha da média móvel via radio. Retorna o inteiro selecionado."""
-    opts = list(dict.fromkeys(list(options) + [default]))  # garante unicidade e inclui default
+    """Escolha da média móvel via radio. Retorna o inteiro selecionado (1 clique)."""
+    # 1) Gera lista ordenada e única, inserindo o default no lugar correto
+    opts = list(options)
+    if default not in opts:
+        insert_at = next((i for i, v in enumerate(opts) if v > default), len(opts))
+        opts = sorted(set(list(options) + [default]))
+    # opcional: garantir ordem crescente (se preferir sempre crescente)
+    # opts = sorted(set(opts))
+
+    # 2) Inicializa o estado só uma vez ANTES do radio
     if state_key not in st.session_state:
         st.session_state[state_key] = default
-    idx = opts.index(st.session_state[state_key]) if st.session_state[state_key] in opts else opts.index(default)
-    mm = st.radio("Média móvel", options=opts, index=idx, horizontal=True)
-    st.session_state[state_key] = mm
+
+    # 3) Radio com key controla o estado; não use `index` aqui
+    mm = st.radio("Média móvel", options=opts, horizontal=True, key=state_key)
     return mm
