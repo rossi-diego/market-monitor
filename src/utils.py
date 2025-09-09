@@ -90,6 +90,76 @@ def asset_picker(df, assets_map: dict[str, str], state_key: str = "close_col", c
     st.caption(f"Ativo selecionado: **{label_atual}**")
     return code, assets
 
+def asset_picker_dropdown(
+    df,
+    assets_map: dict[str, str],
+    state_key: str = "close_col",
+    favorites: list[str] | None = None,
+    label_select: str = "Ativo",
+):
+    """
+    Barra de favoritos (botões) + selectbox pesquisável com TODOS os ativos.
+    Retorna (code, assets_filtrados).
+    """
+    import streamlit as st
+
+    # 1) filtra só o que existe no df (mantém ordem do assets_map)
+    available = {lbl: col for lbl, col in assets_map.items() if col in df.columns}
+    if not available:
+        st.error("Nenhum ativo disponível no DataFrame.")
+        st.stop()
+
+    # 2) favoritos (só os que existem)
+    default_favs = [
+        "Flat do óleo de soja (BRL - C1)",
+        "Flat do óleo de soja (USD - C1)",
+        "Óleo de soja (BOC1)",
+        "Farelo de soja (SMC1)",
+        "Dólar",
+    ]
+    favs = [f for f in (favorites or default_favs) if f in available]
+
+    # 3) estado inicial (prefere BOC1 se existir)
+    if state_key not in st.session_state:
+        st.session_state[state_key] = available.get(
+            "Óleo de soja (BOC1)", next(iter(available.values()))
+        )
+
+    # 4) barra de favoritos (opcional)
+    if favs:
+        cols = st.columns(len(favs))
+        for label, col in zip(favs, cols):
+            code = available[label]
+            with col:
+                pressed = st.button(
+                    label,
+                    key=f"fav_{code}",
+                    type=("primary" if code == st.session_state[state_key] else "secondary"),
+                    use_container_width=True,
+                )
+                if pressed:
+                    st.session_state[state_key] = code
+
+    # 5) selectbox com todos (é pesquisável por teclado)
+    labels_all = list(available.keys())
+    current_code = st.session_state[state_key]
+    current_label = next((k for k, v in available.items() if v == current_code), labels_all[0])
+
+    sel_label = st.selectbox(
+        label_select,
+        options=labels_all,
+        index=labels_all.index(current_label),
+    )
+
+    # sincroniza
+    new_code = available[sel_label]
+    if new_code != st.session_state[state_key]:
+        st.session_state[state_key] = new_code
+
+    st.caption(f"Ativo selecionado: **{sel_label}**")
+    return new_code, available
+(Opcional) Se quiser padronizar visual dos botões, você pode manter sua apply_theme() e, se desejar, criar um inject_button_style() depois.
+
 def date_range_picker(dates, state_key: str = "range", default_days: int = 365, label_slider: str = "Datas disponíveis"):
     """Presets + slider. Retorna (start_date, end_date) como date()."""
     dates = dates.dropna()

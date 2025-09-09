@@ -7,7 +7,7 @@ import datetime as dt
 
 from src.data_pipeline import df
 from src.visualization import plot_price_rsi_plotly
-from src.utils import apply_theme, section, rsi, asset_picker, date_range_picker, ma_picker
+from src.utils import apply_theme, asset_picker, asset_picker_dropdown, date_range_picker, ma_picker, rsi, section
 
 # --- Theme
 apply_theme()
@@ -22,7 +22,7 @@ BASE["date"] = pd.to_datetime(BASE["date"], errors="coerce")
 # ============================================================
 # Seleção do ativo
 # ============================================================
-section("Selecione o ativo", "Clique para trocar o ativo rapidamente", "📊")
+section("Selecione o ativo", "Favoritos + busca", "🧭")
 
 ASSETS_MAP = {
     "Flat do óleo de soja (BRL - C1)": "oleo_flat_brl",
@@ -42,7 +42,13 @@ ASSETS_MAP = {
     "Dólar": "brl=",
 }
 
-CLOSE, _assets = asset_picker(BASE, ASSETS_MAP, state_key="close_col", cols_per_row=6)
+CLOSE, _assets = asset_picker_dropdown(
+    BASE,
+    ASSETS_MAP,
+    state_key="close_col",
+    # favorites opcional; se quiser customizar a ordem:
+    # favorites=["Óleo de soja (BOC1)", "Flat do óleo de soja (BRL - C1)", "Farelo de soja (SMC1)"]
+)
 st.divider()
 
 # ============================================================
@@ -74,8 +80,8 @@ else:
         title=CLOSE.upper(),
         date_col="date",
         close_col=CLOSE,
-        rsi_col=None,            # não precisa ter a coluna pronta
-        rsi_fn=rsi,              # passa a função para calcular
+        rsi_col=None,
+        rsi_fn=rsi,
         rsi_len=14,
         ma_window=ma_window,
         show_bollinger=False,
