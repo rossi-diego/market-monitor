@@ -1,5 +1,7 @@
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -162,7 +164,7 @@ def plot_ratio_std_plotly(
 
     return fig
 
-    def plot_price_rsi_plt(
+def plot_price_rsi_plt(
     df,
     title="BOc1",
     date_col="date",
