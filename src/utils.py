@@ -114,8 +114,8 @@ def asset_picker_dropdown(
         "Flat do óleo de soja (BRL - C1)",
         "Flat do óleo de soja (USD - C1)",
         "Óleo de soja (BOC1)",
-        "Farelo de soja (SMC1)",
-        "Dólar",
+        "Óleo de palma (FCPOC1)",
+        "Heating Oil (HOC1)",
     ]
     favs = [f for f in (favorites or default_favs) if f in available]
 

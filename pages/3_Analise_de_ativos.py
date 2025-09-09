@@ -22,14 +22,12 @@ BASE["date"] = pd.to_datetime(BASE["date"], errors="coerce")
 # ============================================================
 # Seleção do ativo
 # ============================================================
-section("Selecione o ativo", "Favoritos + busca", "🧭")
+section("Selecione o ativo", "Favoritos abaixo, caso queira outro ativo, selecione no dropdown", "🧭")
 
 ASSETS_MAP = {
     "Flat do óleo de soja (BRL - C1)": "oleo_flat_brl",
     "Flat do óleo de soja (USD - C1)": "oleo_flat_usd",
     "Óleo de soja (BOC1)": "boc1",
-    "Flat do farelo de soja (BRL - C1)": "farelo_flat_brl",
-    "Flat do farelo de soja (USD - C1)": "farelo_flat_usd",
     "Farelo de soja (SMC1)": "smc1",
     "Óleo - Prêmio C1": "so-premp-c1",
     "Farelo - Prêmio C1": "sm-premp-c1",
