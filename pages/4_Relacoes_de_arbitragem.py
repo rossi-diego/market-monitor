@@ -1,133 +1,58 @@
 # ============================================================
 # Imports & Config
 # ============================================================
-import datetime as dt
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import numpy as np
 import pandas as pd
 import streamlit as st
+
 from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel
-from src.utils import apply_theme, section, rsi
 from src.visualization import plot_ratio_std_plotly
+from src.utils import apply_theme, section, date_range_picker
 
 # --- Theme
 apply_theme()
 
 # ============================================================
-# Data Prep (garante datetime e separa séries X/Y)
+# Ratios disponíveis (df, coluna_y)
 # ============================================================
-for df in (oleo_farelo, oleo_palma, oleo_diesel):
-    df['date'] = pd.to_datetime(df['date'])
-
-# Bases
-x_of = oleo_farelo['date']; y_of = oleo_farelo['oleo/farelo']
-x_op = oleo_palma['date'];  y_op = oleo_palma['oleo/palma']
-x_od = oleo_diesel['date']; y_od = oleo_diesel['oleo/diesel']
+RATIOS = {
+    "Óleo/Farelo": (oleo_farelo, "oleo/farelo"),
+    "Óleo/Palma":  (oleo_palma,  "oleo/palma"),
+    "Óleo/Diesel": (oleo_diesel, "oleo/diesel"),
+}
 
 # ============================================================
-# UI State (qual gráfico exibir)
+# Seleção do ratio
 # ============================================================
-section("📊 Selecione o ratio (o ratio é aplicado após converter cada commodity para usd/ton)")
+section("Selecione o ratio", "Todos em USD/ton (C1), já convertidos no pipeline.", "📊")
+ratio_label = st.radio("Ratio", options=list(RATIOS.keys()), horizontal=True)
 
-if "plot" not in st.session_state:
-    st.session_state["plot"] = None
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    if st.button("Relação Óleo/Farelo", use_container_width=True):
-        st.session_state["plot"] = "of"
-with col2:
-    if st.button("Relação Óleo/Palma", use_container_width=True):
-        st.session_state["plot"] = "op"
-with col3:
-    if st.button("Relação Óleo/Diesel", use_container_width=True):
-        st.session_state["plot"] = "od"
+df_sel, y_col = RATIOS[ratio_label]
 
 # ============================================================
-# Intervalo de Datas (min/max globais + presets + slider)
+# Período (presets + slider)
 # ============================================================
-# Descobre min/max globais para manter UX consistente
-global_min = min(x_of.min(), x_op.min(), x_od.min()).date()
-global_max = max(x_of.max(), x_op.max(), x_od.max()).date()
-default_start = max(global_min, (global_max - dt.timedelta(days=365)))  # ex.: último 1 ano como padrão
-
 section("Selecione o período do gráfico", "Use presets ou ajuste no slider", "🗓️")
 
-# ---- Presets rápidos (atualizam st.session_state["range"])
-c1, c2, c3, c4, c5 = st.columns(5)
-with c1:
-    if st.button("1M"):
-        st.session_state["range"] = (global_max - dt.timedelta(days=30), global_max)
-with c2:
-    if st.button("3M"):
-        st.session_state["range"] = (global_max - dt.timedelta(days=90), global_max)
-with c3:
-    if st.button("6M"):
-        st.session_state["range"] = (global_max - dt.timedelta(days=180), global_max)
-with c4:
-    if st.button("YTD"):
-        st.session_state["range"] = (dt.date(global_max.year, 1, 1), global_max)
-with c5:
-    if st.button("Máx"):
-        st.session_state["range"] = (global_min, global_max)
+# usa o helper genérico (pega min/max automaticamente)
+start_date, end_date = date_range_picker(df_sel["date"], state_key="ratio_range", default_days=365)
 
-# Decide qual valor inicial o slider usa
-if "range" in st.session_state:
-    default_start, default_end = st.session_state["range"]
+# ============================================================
+# Filtra e plota
+# ============================================================
+mask = (df_sel["date"].dt.date >= start_date) & (df_sel["date"].dt.date <= end_date)
+view = df_sel.loc[mask, ["date", y_col]].dropna().sort_values("date")
+
+if view.empty:
+    st.info("Sem dados no período selecionado.")
 else:
-    default_start, default_end = default_start, global_max
-
-# ---- Slider com “bolinhas” arrastáveis
-start_date, end_date = st.slider(
-    "Período do gráfico",
-    min_value=global_min,
-    max_value=global_max,
-    value=(default_start, default_end),
-    step=dt.timedelta(days=1),
-)
-
-# ============================================================
-# Filtro por Data (helper)
-# ============================================================
-def filter_by_date(x, y, sd, ed):
-    """Filtra as séries x/y pelo intervalo [sd, ed] (inclusive),
-    mantendo índices originais para anotações por idx."""
-    mask = (x.dt.date >= sd) & (x.dt.date <= ed)
-    return x[mask], y[mask]
-
-# Proteção caso o usuário limpe/inverta datas
-if isinstance(start_date, tuple):  # compat com versões antigas do streamlit
-    start_date, end_date = start_date
-
-# ============================================================
-# Renderização (plota conforme o botão selecionado)
-# ============================================================
-if start_date is None or end_date is None or start_date > end_date:
-    st.warning("Selecione um intervalo de datas válido.")
-else:
-    if st.session_state["plot"] == "of":
-        xf, yf = filter_by_date(x_of, y_of, start_date, end_date)
-        if len(yf) == 0:
-            st.info("Sem dados no período selecionado.")
-        else:
-            fig = plot_ratio_std_plotly(xf, yf, title="Relação Óleo/Farelo", ylabel="Relação Óleo/Farelo")
-            st.plotly_chart(fig, use_container_width=True)
-
-    elif st.session_state["plot"] == "op":
-        xf, yf = filter_by_date(x_op, y_op, start_date, end_date)
-        if len(yf) == 0:
-            st.info("Sem dados no período selecionado.")
-        else:
-            fig = plot_ratio_std_plotly(xf, yf, title="Relação Óleo/Palma", ylabel="Relação Óleo/Palma")
-            st.plotly_chart(fig, use_container_width=True)
-
-    elif st.session_state["plot"] == "od":
-        xf, yf = filter_by_date(x_od, y_od, start_date, end_date)
-        if len(yf) == 0:
-            st.info("Sem dados no período selecionado.")
-        else:
-            fig = plot_ratio_std_plotly(xf, yf, title="Relação Óleo/Diesel", ylabel="Óleo/Diesel")
-            st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Clique em um dos botões para exibir o gráfico.")
+    fig = plot_ratio_std_plotly(
+        x=view["date"],
+        y=view[y_col],
+        title=f"Relação {ratio_label}",
+        ylabel=f"Relação {ratio_label}",
+        rolling_window=90,
+        label_series=ratio_label,
+    )
+    # pequeno respiro entre título e gráfico
+    fig.update_layout(title=dict(pad=dict(b=10)))
+    st.plotly_chart(fig, use_container_width=True)
