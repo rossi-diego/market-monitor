@@ -54,5 +54,12 @@ else:
         label_series=ratio_label,
     )
     # pequeno respiro entre título e gráfico
-    fig.update_layout(title=dict(pad=dict(b=10)))
+    fig.update_layout(
+        title=dict(
+            pad=dict(b=12),
+            x=0.0, xanchor="left",
+            y=0.98, yanchor="top",
+            ),
+            margin=dict(t=80),
+    )
     st.plotly_chart(fig, use_container_width=True)
