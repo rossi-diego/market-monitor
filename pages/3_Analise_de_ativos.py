@@ -12,7 +12,7 @@ import streamlit as st
 
 # --- Local project
 from src.data_pipeline import df, oleo_quote
-from src.visualization import plot_price_rsi, plot_price_rsi_plotly, rsi
+from src.visualization import plot_price_rsi_plt, plot_price_rsi_plotly, rsi
 from src.utils import apply_theme, section
 
 # --- Theme
