@@ -334,3 +334,8 @@ def compute_corr(
                 M[i, j] = M[j, i] = tau if np.isfinite(tau) else np.nan
 
     return pd.DataFrame(M, index=cols_, columns=cols_)
+
+
+def vspace(px: int = 12):
+    """Espaço vertical simples."""
+    st.markdown(f"<div style='height:{int(px)}px'></div>", unsafe_allow_html=True)
