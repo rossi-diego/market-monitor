@@ -218,3 +218,119 @@ def ma_picker(options=(20, 50, 200), default: int = 90, state_key: str = "ma_win
     # 3) Radio com key controla o estado; não use `index` aqui
     mm = st.radio("Média móvel", options=opts, horizontal=True, key=state_key)
     return mm
+
+
+def compute_corr(
+    df_base: pd.DataFrame,
+    cols_in: list,
+    method: str,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> pd.DataFrame:
+    """
+    Calcula matriz de correlação (pearson/spearman/kendall) no período.
+    Faz limpeza: numérico, dropna, remove colunas constantes, lida com SciPy ausente.
+    """
+    if "date" not in df_base.columns:
+        st.error("Coluna 'date' não encontrada no DataFrame base.")
+        st.stop()
+
+    # Filtro de período (mantém só as colunas pedidas)
+    df_period = df_base.loc[
+        (df_base["date"].dt.date >= start_date) & (df_base["date"].dt.date <= end_date),
+        ["date"] + cols_in
+    ].copy()
+
+    # Saneia seleção
+    cols_ok = [c for c in cols_in if c in df_period.columns]
+    missing = [c for c in cols_in if c not in df_period.columns]
+    if missing:
+        st.warning(f"Colunas não encontradas e ignoradas: {', '.join(map(str, missing))}")
+    if len(cols_ok) < 2:
+        st.info("Selecione ao menos 2 colunas válidas para a correlação.")
+        st.stop()
+
+    # Numérico + dropna
+    df_num = df_period[cols_ok].apply(pd.to_numeric, errors="coerce").dropna(how="any")
+    if df_num.shape[0] < 2:
+        st.info("Sem amostras suficientes no período após remover valores ausentes.")
+        st.stop()
+
+    # Remove colunas constantes (Kendall falha com variância zero)
+    nun = df_num.nunique(dropna=True)
+    if (nun <= 1).any():
+        dropped = nun[nun <= 1].index.tolist()
+        df_num = df_num.loc[:, nun > 1]
+        st.warning(f"Colunas sem variabilidade removidas: {', '.join(dropped)}")
+    if df_num.shape[1] < 2:
+        st.info("Após remover colunas constantes, restaram menos de 2 colunas.")
+        st.stop()
+
+    m = method.lower()
+    if m in ("pearson", "spearman"):
+        return df_num.corr(method=m)
+
+    # ---- Kendall (com fallback) ----
+    cols_ = df_num.columns.tolist()
+    n = len(cols_)
+    M = np.eye(n, dtype=float)
+
+    # tenta SciPy
+    try:
+        from scipy.stats import kendalltau  # type: ignore
+        use_scipy = True
+    except Exception:
+        use_scipy = False
+
+    if use_scipy:
+        for i in range(n):
+            xi = df_num.iloc[:, i]
+            for j in range(i + 1, n):
+                xj = df_num.iloc[:, j]
+                pair = pd.concat([xi, xj], axis=1).dropna()
+                if pair.shape[0] < 2:
+                    tau = np.nan
+                else:
+                    try:
+                        tau, _ = kendalltau(pair.iloc[:, 0], pair.iloc[:, 1], nan_policy="omit")
+                    except Exception:
+                        tau = np.nan
+                M[i, j] = M[j, i] = tau if np.isfinite(tau) else np.nan
+    else:
+        # fallback simples
+        def _rank_fallback(x: np.ndarray) -> np.ndarray:
+            order = np.argsort(x)
+            ranks = np.empty_like(order, dtype=float)
+            ranks[order] = np.arange(1, len(x) + 1, dtype=float)
+            ux, inv, counts = np.unique(x, return_inverse=True, return_counts=True)
+            for k, c in enumerate(counts):
+                if c > 1:
+                    ranks[inv == k] = ranks[inv == k].mean()
+            return ranks
+
+        def _kendall_tau_fallback(u: np.ndarray, v: np.ndarray) -> float:
+            mask = np.isfinite(u) & np.isfinite(v)
+            u, v = u[mask], v[mask]
+            if u.size < 2:
+                return np.nan
+            ru, rv = _rank_fallback(u), _rank_fallback(v)
+            conc = disc = 0
+            for i in range(len(ru) - 1):
+                du = ru[i + 1:] - ru[i]
+                dv = rv[i + 1:] - rv[i]
+                s = np.sign(du * dv)
+                conc += np.sum(s > 0)
+                disc += np.sum(s < 0)
+            denom = len(ru) * (len(ru) - 1) / 2
+            if denom == 0:
+                return np.nan
+            return (conc - disc) / denom
+
+        for i in range(n):
+            xi = df_num.iloc[:, i].to_numpy(dtype=float)
+            for j in range(i + 1, n):
+                xj = df_num.iloc[:, j].to_numpy(dtype=float)
+                tau = _kendall_tau_fallback(xi, xj)
+                M[i, j] = M[j, i] = tau if np.isfinite(tau) else np.nan
+
+    return pd.DataFrame(M, index=cols_, columns=cols_)

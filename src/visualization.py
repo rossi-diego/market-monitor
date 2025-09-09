@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import seaborn as sns
 
 
 # ------------------------------------------------------------
@@ -466,4 +467,74 @@ def plot_price_rsi_plotly(
         showspikes=True, spikemode="across", spikesnap="cursor",
         row=2, col=1
     )
+    return fig
+
+def _adapt_font(base: int, n: int, step: float = 0.18, floor: int = 6) -> int:
+    """Diminui a fonte quanto maior o n; nunca abaixo de 'floor'."""
+    return max(floor, int(round(base - step * max(0, n - 10))))
+
+def plot_corr_heatmap(
+    corr,
+    size_opt: str = "Médio",
+    show_annot: bool = True,
+    mask_upper: bool = True,
+    method: str = "spearman",
+    start_date=None,
+    end_date=None,
+):
+    """Gera a figura do heatmap (retorna fig)."""
+    SIZE_PRESETS = {
+        "Pequeno": dict(scale=0.28, annot=6,  tick=7,  title=12, cbar=0.55),
+        "Médio":   dict(scale=0.45, annot=8,  tick=9,  title=14, cbar=0.65),
+        "Grande":  dict(scale=0.70, annot=10, tick=11, title=16, cbar=0.75),
+    }
+    P = SIZE_PRESETS.get(size_opt, SIZE_PRESETS["Médio"])
+
+    labels = list(corr.columns)
+    n = len(labels)
+
+    cell_w = 0.60 * P["scale"]
+    cell_h = 0.45 * P["scale"]
+    fig_w = max(4, min(cell_w * n + 2.2, 14))
+    fig_h = max(3, min(cell_h * n + 2.0, 10))
+
+    annot_size = _adapt_font(P["annot"], n)
+    tick_size  = _adapt_font(P["tick"], n)
+    title_size = _adapt_font(P["title"], n, step=0.12)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=110)
+    sns.set_theme(style="white")
+
+    mask = np.triu(np.ones_like(corr, dtype=bool)) if mask_upper else None
+
+    sns.heatmap(
+        corr,
+        annot=show_annot,
+        fmt=".2f",
+        vmin=-1, vmax=1,
+        cmap="RdYlBu_r",
+        square=False,
+        linewidths=0.4 if size_opt == "Pequeno" else 0.5,
+        linecolor="white",
+        mask=mask,
+        annot_kws={"size": annot_size},
+        cbar_kws={"shrink": P["cbar"]},
+        ax=ax,
+    )
+
+    title_txt = f"Matriz de Correlação ({method.title()})"
+    if start_date is not None and end_date is not None:
+        title_txt += f" — {start_date} → {end_date}"
+
+    ax.set_title(title_txt, fontsize=title_size, pad=8)
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=tick_size)
+    ax.set_yticklabels(labels, rotation=0, fontsize=tick_size)
+
+    # Dark-friendly
+    fig.patch.set_alpha(0)
+    ax.set_facecolor((0, 0, 0, 0))
+    for item in [ax.title, ax.xaxis.label, ax.yaxis.label]:
+        item.set_color("#e6e6e6")
+    ax.tick_params(colors="#e6e6e6", labelsize=tick_size)
+
     return fig
