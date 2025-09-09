@@ -158,7 +158,6 @@ def asset_picker_dropdown(
 
     st.caption(f"Ativo selecionado: **{sel_label}**")
     return new_code, available
-(Opcional) Se quiser padronizar visual dos botões, você pode manter sua apply_theme() e, se desejar, criar um inject_button_style() depois.
 
 def date_range_picker(dates, state_key: str = "range", default_days: int = 365, label_slider: str = "Datas disponíveis"):
     """Presets + slider. Retorna (start_date, end_date) como date()."""
