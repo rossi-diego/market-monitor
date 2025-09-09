@@ -1,18 +1,25 @@
 # ============================================================
 # Imports & Config
 # ============================================================
+
+# --- Standard library
+import datetime as dt
+
+# --- Third-party
 import numpy as np
 import pandas as pd
 import streamlit as st
-import datetime as dt
+
+# --- Local project
 from src.data_pipeline import df, oleo_quote
 from src.utils import plot_price_rsi, plot_price_rsi_plotly, rsi
 
-base="dark"
-primaryColor="#7aa2f7"
-backgroundColor="#0E1117"
-secondaryBackgroundColor="#161a23"
-textColor="#e6e6e6"
+# --- Theme (mantido, apenas padronizado como CONSTANTES)
+BASE = "dark"
+PRIMARY_COLOR = "#7aa2f7"
+BACKGROUND_COLOR = "#0E1117"
+SECONDARY_BACKGROUND_COLOR = "#161a23"
+TEXT_COLOR = "#e6e6e6"
 
 # ===== Estilo de títulos (dark-friendly) =====
 st.markdown("""
