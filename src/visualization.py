@@ -154,21 +154,6 @@ def plot_ratio_std_plotly(
     )
     fig.update_yaxes(title_text=ylabel or "Valor", row=1, col=1)
     fig.update_yaxes(title_text="Rolling STD", row=2, col=1)
-    fig.update_xaxes(
-        rangeselector=dict(
-            buttons=[
-                dict(count=1, label="1m", step="month", stepmode="backward"),
-                dict(count=3, label="3m", step="month", stepmode="backward"),
-                dict(count=6, label="6m", step="month", stepmode="backward"),
-                dict(count=1, label="YTD", step="year", stepmode="todate"),
-                dict(count=1, label="1y", step="year", stepmode="backward"),
-                dict(step="all"),
-            ]
-        ),
-        rangeslider_visible=False,
-        showspikes=True, spikemode="across", spikesnap="cursor",
-        row=2, col=1
-    )
     return fig
 
 
