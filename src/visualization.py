@@ -74,8 +74,13 @@ def plot_ratio_std_plotly(
     y: pd.Series,
     title: str = "",
     ylabel: str = "",
-    rolling_window: int = 90,
+    rolling_window: int = 90,         # mantém compatibilidade (se quiser usar só 1 MM)
     label_series: str = "Série",
+    # --- NOVOS CONTROLES ---
+    subplot: str = "std",             # "std" ou "rsi"
+    rsi_len: int = 14,
+    rsi_fn=None,                      # passe utils.rsi daqui da página se quiser
+    ma_windows: list[int] | None = None,   # ex.: [20,50,200]
 ):
     # --- prepara dados ---
     x = pd.to_datetime(pd.Series(x), errors="coerce")
@@ -86,9 +91,37 @@ def plot_ratio_std_plotly(
 
     # --- estatísticas e janelas móveis ---
     minp = max(2, rolling_window // 4)
-    y_roll_mean = df["y"].rolling(rolling_window, min_periods=minp).mean()
-    y_roll_std  = df["y"].rolling(rolling_window, min_periods=minp).std()
+    y_roll_std = df["y"].rolling(rolling_window, min_periods=minp).std()
 
+    # múltiplas MMs (se não vier, usa a antiga como default)
+    if not ma_windows:
+        ma_windows = [rolling_window]
+    ma_dict = {}
+    for w in sorted(set(int(w) for w in ma_windows)):
+        minp_w = max(2, w // 4)
+        ma_dict[w] = df["y"].rolling(w, min_periods=minp_w).mean()
+
+    # RSI (se solicitado)
+    rsi_series = None
+    if subplot.lower() == "rsi":
+        if callable(rsi_fn):
+            # rsi_fn espera um DF com col de preço e data; adaptamos
+            tmp = pd.DataFrame({"date": df["x"], "close": df["y"]})
+            rsi_df = rsi_fn(tmp, ticker_col="close", date_col="date", window=rsi_len)
+            # realinha pela data
+            rsi_df = rsi_df.sort_values("date")
+            rsi_series = pd.Series(rsi_df["RSI"].values, index=rsi_df["date"].values)
+            # recorta no mesmo x de base
+            rsi_series = rsi_series.reindex(df["x"]).astype(float)
+        else:
+            # fallback simples: cálculo rápido de RSI (fechamento) caso não passem rsi_fn
+            delta = df["y"].diff()
+            up = delta.clip(lower=0).rolling(rsi_len).mean()
+            down = (-delta.clip(upper=0)).rolling(rsi_len).mean()
+            rs = up / down
+            rsi_series = 100 - (100 / (1 + rs))
+
+    # extremos / último
     idx_max = df["y"].idxmax(); idx_min = df["y"].idxmin()
     x_max, y_max = df.loc[idx_max, "x"], df.loc[idx_max, "y"]
     x_min, y_min = df.loc[idx_min, "x"], df.loc[idx_min, "y"]
@@ -100,20 +133,26 @@ def plot_ratio_std_plotly(
         row_heights=[0.72, 0.28], vertical_spacing=0.08
     )
 
-    # Série principal + média móvel
+    # (1) Série principal
     fig.add_trace(
         go.Scatter(
             x=df["x"], y=df["y"], mode="lines", name=label_series,
             hovertemplate="%{x|%d/%m/%Y}<br>Valor: %{y:.2f}<extra></extra>"
-        ), row=1, col=1
+        ),
+        row=1, col=1
     )
-    fig.add_trace(
-        go.Scatter(
-            x=df["x"], y=y_roll_mean, mode="lines",
-            name=f"Média Móvel ({rolling_window}d)", line=dict(dash="dash"),
-            hovertemplate="%{x|%d/%m/%Y}<br>Média: %{y:.2f}<extra></extra>"
-        ), row=1, col=1
-    )
+
+    # MAs selecionadas
+    for w, series in ma_dict.items():
+        fig.add_trace(
+            go.Scatter(
+                x=df["x"], y=series, mode="lines",
+                name=f"Média Móvel ({w}d)",
+                line=dict(dash="dash"),
+                hovertemplate="%{x|%d/%m/%Y}<br>MM({w}): %{y:.2f}<extra></extra>"
+            ),
+            row=1, col=1
+        )
 
     # Máx/Mín + marcadores
     fig.add_hline(y=y_max, line_dash="dot", line_width=1.5,
@@ -132,14 +171,43 @@ def plot_ratio_std_plotly(
                              text=[f"{y_last:.2f}"], textposition="top center",
                              name="Último", showlegend=False), row=1, col=1)
 
-    # Subplot 2: Rolling STD
-    fig.add_trace(
-        go.Scatter(
-            x=df["x"], y=y_roll_std, mode="lines",
-            name=f"Desvio Padrão ({rolling_window}d)",
-            hovertemplate="%{x|%d/%m/%Y}<br>STD: %{y:.2f}<extra></extra>"
-        ), row=2, col=1
-    )
+    # (2) Subplot: STD ou RSI
+    if subplot.lower() == "std":
+        fig.add_trace(
+            go.Scatter(
+                x=df["x"], y=y_roll_std, mode="lines",
+                name=f"Desvio Padrão ({rolling_window}d)",
+                hovertemplate="%{x|%d/%m/%Y}<br>STD: %{y:.2f}<extra></extra>"
+            ),
+            row=2, col=1
+        )
+        fig.update_yaxes(title_text="Rolling STD", row=2, col=1)
+    else:
+        # Faixas RSI
+        fig.update_yaxes(range=[0, 100], title_text="RSI", row=2, col=1)
+        fig.add_shape(
+            type="rect", xref="x2 domain", yref="y2",
+            x0=0, x1=1, y0=70, y1=100,
+            fillcolor="rgba(229,115,115,0.20)", line_width=0, layer="below"
+        )
+        fig.add_shape(
+            type="rect", xref="x2 domain", yref="y2",
+            x0=0, x1=1, y0=0, y1=30,
+            fillcolor="rgba(129,199,132,0.20)", line_width=0, layer="below"
+        )
+        fig.add_hline(y=70, line_dash="dash", line_width=1.0, line_color="#E57373", row=2, col=1)
+        fig.add_hline(y=50, line_dash="dash", line_width=1.0, line_color="#9E9E9E", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_width=1.0, line_color="#81C784", row=2, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=df["x"], y=rsi_series, mode="lines",
+                name=f"RSI ({rsi_len})",
+                line=dict(width=1.6),
+                fill="tonexty", fillcolor="rgba(84,110,122,0.06)",
+                hovertemplate="%{x|%d/%m/%Y}<br>RSI: %{y:.1f}<extra></extra>"
+            ),
+            row=2, col=1
+        )
 
     # Layout / eixos
     fig.update_layout(
@@ -151,9 +219,13 @@ def plot_ratio_std_plotly(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+        xaxis_rangeslider_visible=False,  # mata slider global
     )
+    # garante que nenhum subplot crie slider
+    fig.update_xaxes(rangeslider=dict(visible=False), row=1, col=1)
+    fig.update_xaxes(rangeslider=dict(visible=False), row=2, col=1)
+
     fig.update_yaxes(title_text=ylabel or "Valor", row=1, col=1)
-    fig.update_yaxes(title_text="Rolling STD", row=2, col=1)
     return fig
 
 
@@ -453,6 +525,10 @@ def plot_price_rsi_plotly(
         row=2, col=1
     )
     return fig
+
+###########################################################################################
+##########
+###########################################################################################
 
 def _adapt_font(base: int, n: int, step: float = 0.18, floor: int = 6) -> int:
     """Diminui a fonte quanto maior o n; nunca abaixo de 'floor'."""
