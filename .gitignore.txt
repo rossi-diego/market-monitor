@@ -1,0 +1,42 @@
+# ============================
+# Padrões gerais Python
+# ============================
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+*.pyo
+*.pyd
+*.pkl
+*.log
+
+# ============================
+# Ambientes virtuais
+# ============================
+.venv/
+venv/
+env/
+
+# ============================
+# Jupyter / Streamlit
+# ============================
+.ipynb_checkpoints/
+.streamlit/
+
+# ============================
+# Dados e notebooks
+# ============================
+notebooks/
+data/market_intelligence_data/
+
+# ============================
+# Arquivos temporários do sistema
+# ============================
+.DS_Store
+Thumbs.db
+
+# ============================
+# Cache de ferramentas
+# ============================
+.mypy_cache/
+.pytest_cache/
