@@ -27,7 +27,16 @@ RATIOS = {
 section("Selecione o ratio", "Todos em USD/ton (Future C1), já convertidos no pipeline, com exceção do Oil Share", "📊")
 ratio_label = st.radio("Ratio", options=list(RATIOS.keys()), horizontal=True)
 
-df_sel, y_col = RATIOS[ratio_label]
+df_src, y_col = RATIOS[ratio_label]
+df_sel = df_src() if callable(df_src) else df_src
+
+# garante datetime e evita .dt em série não-convertida
+df_sel = df_sel.copy()
+if "date" not in df_sel.columns:
+    st.error("Dataset não possui a coluna 'date' para o ratio selecionado.")
+    st.stop()
+df_sel["date"] = pd.to_datetime(df_sel["date"], errors="coerce")
+df_sel = df_sel.dropna(subset=["date"]).sort_values("date")
 
 # ============================================================
 # Período (presets + slider)
