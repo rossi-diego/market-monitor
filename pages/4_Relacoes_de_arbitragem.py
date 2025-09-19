@@ -24,49 +24,10 @@ RATIOS = {
 # ============================================================
 # Seleção do ratio
 # ============================================================
-section("Selecione o ratio", "Todos em USD/ton (Future C1), já convertidos no pipeline, com exceção do Oil Share", "📊")
-ratio_label = st.radio("Ratio", options=list(RATIOS.keys()), horizontal=True)
+section("Selecione o ratio", "Todos em USD/ton (Future C1), já convertidos no pipeline, com exceção do Oil Share", "📊") 
+ratio_label = st.radio("Ratio", options=list(RATIOS.keys()), horizontal=True) 
 
-df_src, y_col = RATIOS[ratio_label]
-
-# Se for função, chama; se já for DataFrame, usa direto
-try:
-    df_sel = df_src() if callable(df_src) else df_src
-except Exception as e:
-    st.error(f"Falha ao carregar a fonte de dados para '{ratio_label}': {e}")
-    st.stop()
-
-# Valida tipo
-if df_sel is None:
-    st.error(f"A fonte '{ratio_label}' retornou None.")
-    st.stop()
-if not isinstance(df_sel, pd.DataFrame):
-    # tenta converter de forma amigável; se não der, aborta com info útil
-    try:
-        df_sel = pd.DataFrame(df_sel)
-    except Exception:
-        st.error(f"Tipo inesperado para '{ratio_label}': {type(df_sel)}. Esperado: pandas.DataFrame.")
-        st.stop()
-
-# Normaliza e valida coluna de data
-df_sel = df_sel.copy()
-if "date" not in df_sel.columns and "Date" in df_sel.columns:
-    df_sel = df_sel.rename(columns={"Date": "date"})
-
-if "date" not in df_sel.columns:
-    st.error(f"O dataset de '{ratio_label}' não possui coluna 'date'. Colunas: {list(df_sel.columns)}")
-    st.stop()
-
-df_sel["date"] = pd.to_datetime(df_sel["date"], errors="coerce")
-df_sel = df_sel.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
-
-# Garante que a coluna do y existe
-if y_col not in df_sel.columns:
-    st.error(
-        f"A coluna '{y_col}' não existe em '{ratio_label}'. "
-        f"Colunas disponíveis: {list(df_sel.columns)}"
-    )
-    st.stop()
+df_sel, y_col = RATIOS[ratio_label]
 
 # ============================================================
 # ===== Opções de subplot e MMs =====
