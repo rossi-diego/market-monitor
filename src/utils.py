@@ -33,56 +33,17 @@ def section(text, subtitle=None, icon=""):
     if subtitle:
         st.markdown(f'<div class="mm-sub">{subtitle}</div>', unsafe_allow_html=True)
 
-def rsi(df, ticker_col, date_col: str = "date", window: int = 14, on_duplicate: str = "last"):
-    """
-    RSI robusto a datas duplicadas.
-    - df: DataFrame com colunas [date_col, ticker_col]
-    - on_duplicate: "last" | "first" | "mean" (como colapsar valores no mesmo dia)
-    Retorna: DataFrame com colunas [date_col, ticker_col, "RSI"] e *datas únicas*.
-    """
-    import numpy as np
-    import pandas as pd
+def rsi(df, ticker_col, date_col='date', window=14): 
+    df = df.copy()
+    df.sort_values(by=date_col, inplace=True) df['delta'] = df[ticker_col].diff()
+    df['gain'] = df['delta'].where(df['delta'] > 0, 0)
+    df['loss'] = -df['delta'].where(df['delta'] < 0, 0)
+    df['avg_gain'] = df['gain'].rolling(window=window).mean()
+    df['avg_loss'] = df['loss'].rolling(window=window).mean()
+    df['rs'] = df['avg_gain'] / df['avg_loss']
+    df['RSI'] = 100 - (100 / (1 + df['rs']))
 
-    out = df[[date_col, ticker_col]].copy()
-
-    # 1) saneamento
-    out[date_col] = pd.to_datetime(out[date_col], errors="coerce")
-    out[ticker_col] = pd.to_numeric(out[ticker_col], errors="coerce")
-    out = out.dropna(subset=[date_col, ticker_col]).sort_values(date_col)
-
-    # 2) colapsa duplicadas por DIA (garante índice único p/ reindex no plot)
-    #    use .dt.normalize() para ignorar hora/min/seg
-    key = out[date_col].dt.normalize()
-    if on_duplicate == "mean":
-        out = out.groupby(key, as_index=False)[ticker_col].mean()
-        out.rename(columns={key.name: date_col}, inplace=True)
-    elif on_duplicate in ("last", "first"):
-        how = {"last": "last", "first": "first"}[on_duplicate]
-        out = out.groupby(key, as_index=False).agg({ticker_col: how})
-        out.rename(columns={key.name: date_col}, inplace=True)
-    else:
-        # padrão: last
-        out = out.groupby(key, as_index=False).last()
-        out.rename(columns={key.name: date_col}, inplace=True)
-
-    # 3) RSI (método simples com médias móveis)
-    price = out[ticker_col]
-    delta = price.diff()
-
-    gain = delta.clip(lower=0.0)
-    loss = (-delta.clip(upper=0.0))
-
-    # médias com min_periods=window p/ evitar explosões no início
-    avg_gain = gain.rolling(window=window, min_periods=window).mean()
-    avg_loss = loss.rolling(window=window, min_periods=window).mean()
-
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi_val = 100.0 - (100.0 / (1.0 + rs))
-
-    out["RSI"] = rsi_val.astype(float)
-
-    # mantém a mesma interface esperada pelo restante do código
-    return out[[date_col, ticker_col, "RSI"]]
+    return df[[date_col, ticker_col, 'RSI']]
 
 def available_assets(df, assets_map: dict[str, str]) -> dict[str, str]:
     """Filtra o mapa exibindo só colunas que existem no df."""
