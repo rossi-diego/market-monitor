@@ -91,9 +91,28 @@ def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         v["oleo/farelo"] = v["oleo_tons"] / v["farelo_tons"]
         views["oleo_farelo"] = v[["date", "oleo/farelo"]].sort_values("date")
 
-    # Relação óleo/palma (C1) — requer FCPO e MYR
+    # Relação óleo/palma (C1) — tolera lacunas curtas no FCPO/MYR
     if {"boc1", "fcpoc1", "myr="}.issubset(df.columns):
-        v = df[["date", "boc1", "fcpoc1", "myr="]].dropna().copy()
+        v = df[["date", "boc1", "fcpoc1", "myr="]].copy()
+        v["date"] = pd.to_datetime(v["date"], errors="coerce")
+        v[["boc1", "fcpoc1", "myr="]] = v[["boc1", "fcpoc1", "myr="]].apply(pd.to_numeric, errors="coerce")
+        v = v.dropna(subset=["date"]).sort_values("date")
+
+        # calendário diário de dias úteis (Malásia/CME têm feriados diferentes)
+        idx = pd.date_range(v["date"].min(), v["date"].max(), freq="B")
+        v = (v.set_index("date")
+            .reindex(idx)            # cria as “lacunas” explicitamente
+            .rename_axis("date")
+            .reset_index())
+
+        # Preenche SOMENTE FCPO e MYR (não mexe no BO)
+        # limite curto para não “congelar” preço: ajuste se preferir (p.ex., 2 ou 3)
+        FILL_LIMIT = 3
+        v["fcpoc1"] = v["fcpoc1"].ffill(limit=FILL_LIMIT)
+        v["myr="]   = v["myr="].ffill(limit=FILL_LIMIT)
+
+        # Agora calcula tons (só onde houver dados suficientes)
+        v = v.dropna(subset=["boc1", "fcpoc1", "myr="]).copy()
         v["oleo_tons"]  = v["boc1"] * TON_OLEO
         v["palma_tons"] = v["fcpoc1"] / v["myr="]
         v["oleo/palma"] = v["oleo_tons"] / v["palma_tons"]
