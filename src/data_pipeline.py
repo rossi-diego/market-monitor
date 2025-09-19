@@ -91,32 +91,50 @@ def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         v["oleo/farelo"] = v["oleo_tons"] / v["farelo_tons"]
         views["oleo_farelo"] = v[["date", "oleo/farelo"]].sort_values("date")
 
-    # Relação óleo/palma (C1) — tolera lacunas curtas no FCPO/MYR
+    # Relação óleo/palma (C1) — robusta a lacunas curtas em FCPO e MYR
     if {"boc1", "fcpoc1", "myr="}.issubset(df.columns):
         v = df[["date", "boc1", "fcpoc1", "myr="]].copy()
         v["date"] = pd.to_datetime(v["date"], errors="coerce")
         v[["boc1", "fcpoc1", "myr="]] = v[["boc1", "fcpoc1", "myr="]].apply(pd.to_numeric, errors="coerce")
         v = v.dropna(subset=["date"]).sort_values("date")
 
-        # calendário diário de dias úteis (Malásia/CME têm feriados diferentes)
-        idx = pd.date_range(v["date"].min(), v["date"].max(), freq="B")
-        v = (v.set_index("date")
-            .reindex(idx)            # cria as “lacunas” explicitamente
-            .rename_axis("date")
-            .reset_index())
+        if not v.empty:
+            # calendário de dias úteis
+            idx = pd.bdate_range(v["date"].min(), v["date"].max(), name="date")
 
-        # Preenche SOMENTE FCPO e MYR (não mexe no BO)
-        # limite curto para não “congelar” preço: ajuste se preferir (p.ex., 2 ou 3)
-        FILL_LIMIT = 3
-        v["fcpoc1"] = v["fcpoc1"].ffill(limit=FILL_LIMIT)
-        v["myr="]   = v["myr="].ffill(limit=FILL_LIMIT)
+            # limites de preenchimento (ajuste conforme seu apetite)
+            OIL_LIMIT  = 1   # óleo (CME) raramente “congela”; 1 dia já resolve feriados pontuais
+            PALM_LIMIT = 3   # palma (BMD) pode “sumir” mais; 2–3 dias costuma ser ok
+            MYR_LIMIT  = 3
 
-        # Agora calcula tons (só onde houver dados suficientes)
-        v = v.dropna(subset=["boc1", "fcpoc1", "myr="]).copy()
-        v["oleo_tons"]  = v["boc1"] * TON_OLEO
-        v["palma_tons"] = v["fcpoc1"] / v["myr="]
-        v["oleo/palma"] = v["oleo_tons"] / v["palma_tons"]
-        views["oleo_palma"] = v[["date", "oleo/palma"]].sort_values("date")
+            # reindexa e preenche CADA série separadamente (evita perder quando uma está fechada)
+            bo   = (v[["date", "boc1"]].set_index("date")
+                    .reindex(idx)
+                    .ffill(limit=OIL_LIMIT)
+                    .rename(columns={"boc1": "boc1"}))
+
+            fcpo = (v[["date", "fcpoc1"]].set_index("date")
+                    .reindex(idx)
+                    .ffill(limit=PALM_LIMIT)
+                    .rename(columns={"fcpoc1": "fcpoc1"}))
+
+            myr  = (v[["date", "myr="]].set_index("date")
+                    .reindex(idx)
+                    .ffill(limit=MYR_LIMIT)
+                    .rename(columns={"myr=": "myr"}))
+
+            # junta e mantém só dias em que as três séries existem após o ffill limitado
+            w = pd.concat([bo, fcpo, myr], axis=1).dropna(how="any").reset_index()
+            w.rename(columns={"index": "date"}, inplace=True)
+
+            # calcula em toneladas / USD
+            w["oleo_tons"]  = w["boc1"] * TON_OLEO
+            w["palma_tons"] = w["fcpoc1"] / w["myr"]
+            w["oleo/palma"] = w["oleo_tons"] / w["palma_tons"]
+
+            # salva a view se restou algo
+            if not w.empty:
+                views["oleo_palma"] = w[["date", "oleo/palma"]].sort_values("date")
 
     # Relação óleo/diesel (C1) — Heating Oil
     if {"boc1", "hoc1"}.issubset(df.columns):
