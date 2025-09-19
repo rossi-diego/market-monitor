@@ -50,7 +50,9 @@ subplot_key = "std" if subplot_opt == "Rolling STD" else "rsi"
 # ============================================================
 # Filtra e plota
 # ============================================================
+df_sel["date"] = pd.to_datetime(df_sel["date"], errors="coerce")
 mask = (df_sel["date"].dt.date >= start_date) & (df_sel["date"].dt.date <= end_date)
+df_sel = df_sel[mask]
 view = df_sel.loc[mask, ["date", y_col]].dropna().sort_values("date")
 
 if view.empty:
