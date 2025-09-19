@@ -24,10 +24,32 @@ RATIOS = {
 # ============================================================
 # Seleção do ratio
 # ============================================================
-section("Selecione o ratio", "Todos em USD/ton (Future C1), já convertidos no pipeline, com exceção do Oil Share", "📊") 
-ratio_label = st.radio("Ratio", options=list(RATIOS.keys()), horizontal=True) 
-
+section(
+    "Selecione o ratio",
+    "Todos em USD/ton (Future C1), já convertidos no pipeline, com exceção do Oil Share",
+    "📊"
+)
+ratio_label = st.radio("Ratio", options=list(RATIOS.keys()), horizontal=True)
 df_sel, y_col = RATIOS[ratio_label]
+
+# Checagens iniciais
+if df_sel is None or df_sel.empty:
+    st.warning(f"Sem dados disponíveis para **{ratio_label}**.")
+    st.stop()
+
+if y_col not in df_sel.columns:
+    st.error(f"A coluna **{y_col}** não existe na view do ratio **{ratio_label}**.")
+    st.stop()
+
+# ============================================================
+# Período (usa seu helper)
+# ============================================================
+try:
+    start_date, end_date = date_range_picker(df_sel["date"], state_key="arb_range", default_days=365)
+except Exception:
+    # garante datetime antes do helper (se 'date' vier como string)
+    df_sel["date"] = pd.to_datetime(df_sel["date"], errors="coerce")
+    start_date, end_date = date_range_picker(df_sel["date"], state_key="arb_range", default_days=365)
 
 # ============================================================
 # ===== Opções de subplot e MMs =====
