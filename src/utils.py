@@ -33,17 +33,22 @@ def section(text, subtitle=None, icon=""):
     if subtitle:
         st.markdown(f'<div class="mm-sub">{subtitle}</div>', unsafe_allow_html=True)
 
-def rsi(df, ticker_col, date_col='date', window=14): 
-    df = df.copy()
-    df.sort_values(by=date_col, inplace=True) df['delta'] = df[ticker_col].diff()
-    df['gain'] = df['delta'].where(df['delta'] > 0, 0)
-    df['loss'] = -df['delta'].where(df['delta'] < 0, 0)
-    df['avg_gain'] = df['gain'].rolling(window=window).mean()
-    df['avg_loss'] = df['loss'].rolling(window=window).mean()
-    df['rs'] = df['avg_gain'] / df['avg_loss']
-    df['RSI'] = 100 - (100 / (1 + df['rs']))
+def rsi(series: pd.Series, length: int = 14) -> pd.Series:
+    """
+    RSI clássico (Wilder) sem dependências. Retorna uma Series alinhada ao índice de 'series'.
+    """
+    s = pd.to_numeric(pd.Series(series), errors="coerce")
+    delta = s.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
 
-    return df[[date_col, ticker_col, 'RSI']]
+    # Médias exponenciais com alpha = 1/length (aproximação Wilder)
+    avg_gain = gain.ewm(alpha=1/length, adjust=False, min_periods=length).mean()
+    avg_loss = loss.ewm(alpha=1/length, adjust=False, min_periods=length).mean()
+
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    out = 100 - (100 / (1 + rs))
+    return out
 
 def available_assets(df, assets_map: dict[str, str]) -> dict[str, str]:
     """Filtra o mapa exibindo só colunas que existem no df."""
