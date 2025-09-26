@@ -38,6 +38,7 @@ ASSETS_MAP = {
     "Brent (LCOC1)": "lcoc1",
     "Heating Oil (HOC1)": "hoc1",
     "Dólar": "brl=",
+    "Bitcoin": "btc=",
 }
 
 CLOSE, _assets = asset_picker_dropdown(
