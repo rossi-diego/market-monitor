@@ -21,7 +21,6 @@ from src.data_pipeline import df
 from src.visualization import plot_price_rsi_plotly
 from src.utils import (
     apply_theme,
-    asset_picker,
     asset_picker_dropdown,
     date_range_picker,
     ma_picker,
@@ -204,14 +203,21 @@ else:
         else:
             cols = ["date", close_col, second_col]
 
-            # Como tratar datas faltantes entre os dois ativos
+            # ====================================================
+            # Tratamento de dados faltantes
+            # ====================================================
+            st.markdown("**Tratamento de dados faltantes**")
             merge_mode = st.radio(
-                "Tratamento de datas faltantes",
+                "",
                 options=(
                     "Datas em comum (sem preenchimento)",
                     "Preencher pequenos gaps com último valor (ffill)",
                 ),
                 key="merge_mode",
+            )
+            st.caption(
+                "• *Datas em comum*: usa apenas dias em que os dois ativos têm preço.\n"
+                "• *ffill*: preenche pequenos gaps com o último valor disponível (até alguns dias)."
             )
 
             if merge_mode.startswith("Datas em comum"):
@@ -258,7 +264,12 @@ else:
                     "Sem dados no período selecionado (após tratamento de datas)."
                 )
             else:
-                # --- Normalization option (index = 100 at start) ---
+                st.markdown("---")
+
+                # ====================================================
+                # Normalização (opcional)
+                # ====================================================
+                st.markdown("**Normalização (opcional)**")
                 normalize = st.checkbox(
                     "Normalizar ambos os ativos (início do período = 100)",
                     value=False,
@@ -266,8 +277,10 @@ else:
                 )
 
                 st.caption(
-                    "A normalização ajusta cada série para que ambas comecem em 100 na primeira data selecionada. "
-                    "Isso facilita a comparação da variação percentual entre ativos com escalas diferentes."
+                    "A normalização reescala cada série para que ambas comecem em **100** "
+                    "na primeira data do período selecionado. Isso facilita comparar a "
+                    "variação percentual entre os ativos, sem alterar a forma da série "
+                    "nem os retornos relativos."
                 )
 
                 st.markdown("<br>", unsafe_allow_html=True)
