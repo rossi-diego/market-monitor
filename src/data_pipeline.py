@@ -3,22 +3,70 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src.config import BASE
+from src.config import DATA
 from src.utils import rsi
 
 # -----------------------------
 # 1) Load base e padronização
 # -----------------------------
-def _load_base(path: str | pd.PathLike = BASE) -> pd.DataFrame:
+def load_base_csv(
+    path: PathLike = DATA,
+    possible_date_columns: tuple[str, ...] = ("date", "Date"),
+) -> pd.DataFrame:
+    """
+    Load a CSV file and standardize its date column.
+
+    - Reads the CSV from `path` into a pandas DataFrame.
+    - Looks for a date column using the names in `possible_date_columns`.
+    - Casts the date column to datetime with `errors='coerce'`.
+    - Renames the chosen date column to `"date"`.
+    - Sorts the DataFrame by `"date"` and resets the index.
+
+    Parameters
+    ----------
+    path : str | os.PathLike | Path, optional
+        Path to the CSV file. Defaults to the global BASE variable.
+    possible_date_columns : tuple[str, ...], optional
+        Ordered list of column names to try as the date column. The
+        first one found will be used and then renamed to `"date"`.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with a standardized `"date"` column (datetime),
+        sorted in ascending order.
+
+    Raises
+    ------
+    ValueError
+        If none of the `possible_date_columns` are found in the CSV.
+    """
+    # Load the CSV
     df = pd.read_csv(path)
-    if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df = df.rename(columns={"Date": "date"})
-    elif "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    else:
-        raise ValueError("Coluna de data não encontrada: espere 'Date' ou 'date'.")
+
+    # Find which column will be used as the date column
+    date_col_name = None
+    for col in possible_date_columns:
+        if col in df.columns:
+            date_col_name = col
+            break
+
+    if date_col_name is None:
+        raise ValueError(
+            f"Date column not found. Expected one of: {possible_date_columns}. "
+            f"Available columns: {list(df.columns)}"
+        )
+
+    # Convert to datetime
+    df[date_col_name] = pd.to_datetime(df[date_col_name], errors="coerce")
+
+    # Standardize column name to 'date' (only rename if needed)
+    if date_col_name != "date":
+        df = df.rename(columns={date_col_name: "date"})
+
+    # Sort and reset index
     df = df.sort_values("date").reset_index(drop=True)
+
     return df
 
 # -----------------------------
@@ -160,7 +208,7 @@ def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 # 4) Pipeline público
 # -----------------------------
 def load_all() -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
-    base = _load_base(BASE)
+    base = _load_base(DATA)
     add_flats_inplace(base)      # <- MUTANDO o df original
     views = build_views(base)
     return base, views
