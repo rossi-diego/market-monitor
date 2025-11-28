@@ -97,16 +97,17 @@ second_col = None
 second_label = None
 
 if compare_two:
-    # Let user pick a second asset (can be any; if you don't want duplicates you can filter here)
-    second_col, _ = asset_picker_dropdown(
-        BASE,
-        ASSETS_MAP,
-        state_key="second_close_col",
+    # Build list of labels, excluding the first asset (optional)
+    asset_labels = list(ASSETS_MAP.keys())
+    asset_labels_no_first = [lbl for lbl in asset_labels if ASSETS_MAP[lbl] != close_col]
+
+    second_label = st.selectbox(
+        "Segundo ativo",
+        options=asset_labels_no_first,
+        key="second_asset_select",
     )
-    second_label = next(
-        (label for label, col in ASSETS_MAP.items() if col == second_col),
-        second_col,
-    )
+
+    second_col = ASSETS_MAP[second_label]
 
 st.divider()
 
