@@ -81,7 +81,9 @@ asset_label = next(
     close_col,
 )
 
+# ============================================================
 # Optional: second asset for comparison
+# ============================================================
 section(
     "Comparação",
     "Opcional: selecione um segundo ativo para comparar no mesmo gráfico.",
@@ -99,7 +101,9 @@ second_label = None
 if compare_two:
     # Build list of labels, excluding the first asset (optional)
     asset_labels = list(ASSETS_MAP.keys())
-    asset_labels_no_first = [lbl for lbl in asset_labels if ASSETS_MAP[lbl] != close_col]
+    asset_labels_no_first = [
+        lbl for lbl in asset_labels if ASSETS_MAP[lbl] != close_col
+    ]
 
     second_label = st.selectbox(
         "Segundo ativo",
@@ -135,7 +139,9 @@ if not compare_two:
     )
     st.caption(f"Média móvel selecionada: **{ma_window}** períodos")
 else:
-    st.caption("Média móvel e RSI desativados no modo de comparação entre dois ativos.")
+    st.caption(
+        "Média móvel e RSI desativados no modo de comparação entre dois ativos."
+    )
 
 st.divider()
 
@@ -197,11 +203,87 @@ else:
             )
         else:
             cols = ["date", close_col, second_col]
-            df_view = BASE.loc[mask, cols].dropna(subset=["date"]).copy()
+
+            # Como tratar datas faltantes entre os dois ativos
+            merge_mode = st.radio(
+                "Tratamento de datas faltantes",
+                options=(
+                    "Datas em comum (sem preenchimento)",
+                    "Preencher pequenos gaps com último valor (ffill)",
+                ),
+                key="merge_mode",
+            )
+
+            if merge_mode.startswith("Datas em comum"):
+                # Usa apenas dias em que os DOIS ativos têm preço
+                tmp = (
+                    BASE.loc[mask, cols]
+                    .dropna(subset=cols)  # exige date, close_col e second_col
+                    .copy()
+                )
+            else:
+                # Reindexa em calendário de dias úteis e faz ffill limitado
+                GAP_LIMIT = 3  # máx. dias consecutivos de preenchimento
+
+                tmp = (
+                    BASE.loc[mask, cols]
+                    .dropna(subset=["date"])
+                    .copy()
+                    .sort_values("date")
+                )
+
+                if tmp.empty:
+                    tmp = pd.DataFrame(columns=cols)
+                else:
+                    idx = pd.bdate_range(
+                        tmp["date"].min(), tmp["date"].max(), name="date"
+                    )
+
+                    tmp = (
+                        tmp.set_index("date")
+                        .reindex(idx)
+                        .ffill(limit=GAP_LIMIT)
+                        .dropna(how="all")  # remove linhas totalmente vazias
+                        .reset_index()
+                        .rename(columns={"index": "date"})
+                    )
+
+                    # Garante que ambos tenham valor depois do preenchimento
+                    tmp = tmp.dropna(subset=[close_col, second_col])
+
+            df_view = tmp
 
             if df_view.empty:
-                st.info("Sem dados no período selecionado.")
+                st.info(
+                    "Sem dados no período selecionado (após tratamento de datas)."
+                )
             else:
+                # --- Normalization option (index = 100 at start) ---
+                normalize = st.checkbox(
+                    "Normalizar ambos os ativos (início do período = 100)",
+                    value=False,
+                    key="normalize_compare",
+                )
+
+                yaxis_title_left = asset_label
+                yaxis_title_right = second_label
+
+                if normalize:
+                    for col in [close_col, second_col]:
+                        series = df_view[col].dropna()
+                        if not series.empty:
+                            base = series.iloc[0]
+                            if base != 0:
+                                df_view[col] = df_view[col] / base * 100
+
+                    yaxis_title_left = (
+                        f"{asset_label} (índice, início = 100)"
+                    )
+                    yaxis_title_right = (
+                        f"{second_label} (índice, início = 100)"
+                    )
+
+                # --- Plot two-asset comparison (price-only) ---
                 fig = go.Figure()
 
                 # First asset (left y-axis)
@@ -237,12 +319,12 @@ else:
                     ),
                     xaxis=dict(title="Data"),
                     yaxis=dict(
-                        title=asset_label,
+                        title=yaxis_title_left,
                         side="left",
                         showgrid=True,
                     ),
                     yaxis2=dict(
-                        title=second_label,
+                        title=yaxis_title_right,
                         side="right",
                         overlaying="y",
                         showgrid=False,
