@@ -1,4 +1,5 @@
 from __future__ import annotations
+from os import PathLike
 
 import numpy as np
 import pandas as pd
