@@ -39,9 +39,9 @@ BASE["date"] = pd.to_datetime(BASE["date"], errors="coerce")
 # Asset selection
 # ============================================================
 section(
-    title="Selecione o ativo",
-    subtitle="Favoritos abaixo, caso queira outro ativo, selecione no dropdown",
-    emoji="🧭",
+    "Selecione o ativo",
+    "Favoritos abaixo, caso queira outro ativo, selecione no dropdown",
+    "🧭",
 )
 
 ASSETS_MAP = {
