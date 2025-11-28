@@ -209,7 +209,7 @@ def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 # 4) Pipeline público
 # -----------------------------
 def load_all() -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
-    data = _load_data_csv(DATA)
+    data = load_data_csv(DATA)
     add_flats_inplace(data)
     views = build_views(data)
     return data, views
