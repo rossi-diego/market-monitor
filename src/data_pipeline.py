@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Iterable
 from os import PathLike
 
 import numpy as np
@@ -7,8 +8,11 @@ import pandas as pd
 from src.config import DATA
 from src.utils import rsi
 
+TON_OLEO: float   = 22.0462  # BOc → USD/ton
+TON_FARELO: float = 1.1023   # SMc → USD/ton
+
 # -----------------------------
-# 1) Load base e padronização
+# 1) Load data e padronização
 # -----------------------------
 def load_data_csv(
     path: PathLike = DATA,
@@ -26,7 +30,7 @@ def load_data_csv(
     Parameters
     ----------
     path : str | os.PathLike | Path, optional
-        Path to the CSV file. Defaults to the global BASE variable.
+        Path to the CSV file. Defaults to the global DATA variable.
     possible_date_columns : tuple[str, ...], optional
         Ordered list of column names to try as the date column. The
         first one found will be used and then renamed to `"date"`.
@@ -71,142 +75,98 @@ def load_data_csv(
     return df
 
 # -----------------------------
-# 2) Colunas derivadas (flats) — IN PLACE
+# 2) Flat calculation
 # -----------------------------
-TON_OLEO   = 22.0462   # conversão BOc -> USD/ton
-TON_FARELO = 1.1023    # conversão SMc -> USD/ton
 
 def add_flats_inplace(
     df: pd.DataFrame,
-    maturities = range(1, 7),   # C1..C6
+    maturities: Iterable[int] = range(1, 7),  # C1..C6
     brl_col: str = "brl=",
 ) -> None:
-    """Cria colunas flat (USD e BRL) para óleo e farelo, para C1..C6, modificando df IN PLACE."""
-    # força numérico no que existir
-    to_numeric = set()
-    for n in maturities:
-        to_numeric |= {
-            f"boc{n}", f"so-premp-c{n}",
-            f"smc{n}", f"sm-premp-c{n}",
-        } & set(df.columns)
-    if brl_col in df.columns:
-        to_numeric.add(brl_col)
-    for c in to_numeric:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+    """
+    Add flat price columns (USD and BRL) for soybean oil and soybean meal.
 
-    # gera colunas para cada vencimento
+    For each maturity n in `maturities`, creates:
+      - Oil:
+          oleo_flat_usd_c{n}
+          oleo_flat_brl_c{n}  (if BRL column exists)
+      - Meal:
+          farelo_flat_usd_c{n}
+          farelo_flat_brl_c{n}
+
+    The function modifies the DataFrame IN PLACE.
+    """
+
+    # ----------------------------------------
+    # 2.1) Identify all columns that must be numeric
+    # ----------------------------------------
+    numeric_cols: set[str] = set()
+
+    for n in maturities:
+        candidate_cols = (
+            f"boc{n}",
+            f"so-premp-c{n}",
+            f"smc{n}",
+            f"sm-premp-c{n}",
+        )
+        for col in candidate_cols:
+            if col in df.columns:
+                numeric_cols.add(col)
+
+    if brl_col in df.columns:
+        numeric_cols.add(brl_col)
+
+    # Convert selected columns to numeric
+    if numeric_cols:
+        df[list(numeric_cols)] = df[list(numeric_cols)].apply(
+            pd.to_numeric, errors="coerce"
+        )
+
+    # ----------------------------------------
+    # 2.2) Compute flat prices per maturity
+    # ----------------------------------------
+    has_brl = brl_col in df.columns
+
     for n in maturities:
         boc = f"boc{n}"
         sop = f"so-premp-c{n}"
         smc = f"smc{n}"
         smp = f"sm-premp-c{n}"
 
-        # Óleo
+        # OIL
         if boc in df.columns and sop in df.columns:
-            usd_col = f"oleo_flat_usd_c{n}"
-            df.loc[:, usd_col] = (df[boc] + (df[sop] / 100.0)) * TON_OLEO
-            if brl_col in df.columns:
-                df.loc[:, f"oleo_flat_brl_c{n}"] = df[usd_col] * df[brl_col]
+            oil_usd = f"oleo_flat_usd_c{n}"
+            df.loc[:, oil_usd] = (df[boc] + df[sop] / 100.0) * TON_OLEO
 
-        # Farelo
+            if has_brl:
+                df.loc[:, f"oleo_flat_brl_c{n}"] = df[oil_usd] * df[brl_col]
+
+        # MEAL
         if smc in df.columns and smp in df.columns:
-            usd_col = f"farelo_flat_usd_c{n}"
-            df.loc[:, usd_col] = (df[smc] + (df[smp] / 100.0)) * TON_FARELO
-            if brl_col in df.columns:
-                df.loc[:, f"farelo_flat_brl_c{n}"] = df[usd_col] * df[brl_col]
+            meal_usd = f"farelo_flat_usd_c{n}"
+            df.loc[:, meal_usd] = (df[smc] + df[smp] / 100.0) * TON_FARELO
 
-    # aliases (compat com páginas antigas)
+            if has_brl:
+                df.loc[:, f"farelo_flat_brl_c{n}"] = df[meal_usd] * df[brl_col]
+
+    # ----------------------------------------
+    # 2.3) Backward-compatibility aliases
+    # ----------------------------------------
     alias_map = {
-        "oleo_flat_usd":  "oleo_flat_usd_c1",
-        "oleo_flat_brl":  "oleo_flat_brl_c1",
-        "farelo_flat_usd":"farelo_flat_usd_c1",
-        "farelo_flat_brl":"farelo_flat_brl_c1",
+        "oleo_flat_usd":   "oleo_flat_usd_c1",
+        "oleo_flat_brl":   "oleo_flat_brl_c1",
+        "farelo_flat_usd": "farelo_flat_usd_c1",
+        "farelo_flat_brl": "farelo_flat_brl_c1",
     }
-    for alias, base_col in alias_map.items():
-        if base_col in df.columns and alias not in df.columns:
-            df.loc[:, alias] = df[base_col]
+
+    for alias, source in alias_map.items():
+        if source in df.columns and alias not in df.columns:
+            df.loc[:, alias] = df[source]
+
+
 
 # -----------------------------
-# 3) Views (ratios) — usam C1 por padrão
-# -----------------------------
-def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    views: dict[str, pd.DataFrame] = {}
-
-    # Relação óleo/farelo (C1)
-    if {"boc1", "smc1"}.issubset(df.columns):
-        v = df[["date", "boc1", "smc1"]].dropna().copy()
-        v["oleo_tons"]   = v["boc1"] * TON_OLEO
-        v["farelo_tons"] = v["smc1"] * TON_FARELO
-        v["oleo/farelo"] = v["oleo_tons"] / v["farelo_tons"]
-        views["oleo_farelo"] = v[["date", "oleo/farelo"]].sort_values("date")
-
-    # Relação óleo/palma (C1) — robusta a lacunas curtas em FCPO e MYR
-    if {"boc1", "fcpoc1", "myr="}.issubset(df.columns):
-        v = df[["date", "boc1", "fcpoc1", "myr="]].copy()
-        v["date"] = pd.to_datetime(v["date"], errors="coerce")
-        v[["boc1", "fcpoc1", "myr="]] = v[["boc1", "fcpoc1", "myr="]].apply(pd.to_numeric, errors="coerce")
-        v = v.dropna(subset=["date"]).sort_values("date")
-
-        if not v.empty:
-            # calendário de dias úteis
-            idx = pd.bdate_range(v["date"].min(), v["date"].max(), name="date")
-
-            # limites de preenchimento (ajuste conforme seu apetite)
-            OIL_LIMIT  = 1   # óleo (CME) raramente “congela”; 1 dia já resolve feriados pontuais
-            PALM_LIMIT = 3   # palma (BMD) pode “sumir” mais; 2–3 dias costuma ser ok
-            MYR_LIMIT  = 3
-
-            # reindexa e preenche CADA série separadamente (evita perder quando uma está fechada)
-            bo   = (v[["date", "boc1"]].set_index("date")
-                    .reindex(idx)
-                    .ffill(limit=OIL_LIMIT)
-                    .rename(columns={"boc1": "boc1"}))
-
-            fcpo = (v[["date", "fcpoc1"]].set_index("date")
-                    .reindex(idx)
-                    .ffill(limit=PALM_LIMIT)
-                    .rename(columns={"fcpoc1": "fcpoc1"}))
-
-            myr  = (v[["date", "myr="]].set_index("date")
-                    .reindex(idx)
-                    .ffill(limit=MYR_LIMIT)
-                    .rename(columns={"myr=": "myr"}))
-
-            # junta e mantém só dias em que as três séries existem após o ffill limitado
-            w = pd.concat([bo, fcpo, myr], axis=1).dropna(how="any").reset_index()
-            w.rename(columns={"index": "date"}, inplace=True)
-
-            # calcula em toneladas / USD
-            w["oleo_tons"]  = w["boc1"] * TON_OLEO
-            w["palma_tons"] = w["fcpoc1"] / w["myr"]
-            w["oleo/palma"] = w["oleo_tons"] / w["palma_tons"]
-
-            # salva a view se restou algo
-            if not w.empty:
-                views["oleo_palma"] = w[["date", "oleo/palma"]].sort_values("date")
-
-    # Relação óleo/diesel (C1) — Heating Oil
-    if {"boc1", "hoc1"}.issubset(df.columns):
-        v = df[["date", "boc1", "hoc1"]].dropna().copy()
-        v["oleo_tons"]   = v["boc1"] * TON_OLEO
-        v["diesel_tons"] = v["hoc1"] / 0.003785 / 0.782
-        v["oleo/diesel"] = v["oleo_tons"] / v["diesel_tons"]
-        views["oleo_diesel"] = v[["date", "oleo/diesel"]].sort_values("date")
-
-    # Oil Share CME
-    if {"boc1", "smc1"}.issubset(df.columns):
-        v = df[["date", "boc1", "smc1"]].dropna().copy()
-        v["oleo_revenue"]   = v["boc1"] * 0.11
-        v["farelo_revenue"] = v["smc1"] * 0.022
-        v["crushing_revenue"] = v["oleo_revenue"] + v["farelo_revenue"]
-        v["oil_share"] = v["oleo_revenue"] / v["crushing_revenue"]
-        views["oil_share"] = v[["date", "oil_share"]].sort_values("date")
-
-
-    return views
-
-# -----------------------------
-# 4) Pipeline público
+# 3) Pipeline
 # -----------------------------
 def load_all() -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     data = load_data_csv(DATA)
@@ -215,10 +175,165 @@ def load_all() -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     return data, views
 
 # -----------------------------
-# 5) Exports de conveniência
+# 4) Views (ratios) — use C1 by default
 # -----------------------------
-df, _views  = load_all()
+def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """
+    Build standard price-ratio views (using C1 contracts) from the input data.
+
+    Returns a dict with zero or more of the following keys,
+    depending on which columns are available in `df`:
+
+        - "oleo_farelo" : oil/meal ratio (C1)
+        - "oleo_palma"  : oil/palm ratio (C1), with short-gap filling in FCPO and MYR
+        - "oleo_diesel" : oil/diesel ratio (C1, Heating Oil)
+        - "oil_share"   : CME-style oil share (C1)
+    """
+    views: dict[str, pd.DataFrame] = {}
+
+    # --- Oil / Meal ratio (C1) -------------------------------------------
+    if {"boc1", "smc1"}.issubset(df.columns):
+        v = df[["date", "boc1", "smc1"]].dropna().copy()
+
+        v["oleo_tons"] = v["boc1"] * TON_OLEO
+        v["farelo_tons"] = v["smc1"] * TON_FARELO
+        v["oleo_farelo"] = v["oleo_tons"] / v["farelo_tons"]
+
+        views["oleo_farelo"] = (
+            v[["date", "oleo_farelo"]]
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
+
+    # --- Oil / Palm ratio (C1) — robust to short gaps in FCPO and MYR ----
+    if {"boc1", "fcpoc1", "myr="}.issubset(df.columns):
+        v = df[["date", "boc1", "fcpoc1", "myr="]].copy()
+
+        # Ensure proper dtypes
+        v["date"] = pd.to_datetime(v["date"], errors="coerce")
+        v[["boc1", "fcpoc1", "myr="]] = v[["boc1", "fcpoc1", "myr="]].apply(
+            pd.to_numeric, errors="coerce"
+        )
+        v = v.dropna(subset=["date"]).sort_values("date")
+
+        if not v.empty:
+            # Business-day calendar
+            idx = pd.bdate_range(v["date"].min(), v["date"].max(), name="date")
+
+            # Forward-fill limits (tune according to your risk appetite)
+            OIL_LIMIT = 1   # CME oil rarely "freezes"; 1 day handles isolated holidays
+            PALM_LIMIT = 3  # BMD palm can miss more days; 2–3 days usually ok
+            MYR_LIMIT = 3
+
+            # Reindex and forward-fill EACH series separately
+            oil = (
+                v[["date", "boc1"]]
+                .set_index("date")
+                .reindex(idx)
+                .ffill(limit=OIL_LIMIT)
+            )
+
+            palm = (
+                v[["date", "fcpoc1"]]
+                .set_index("date")
+                .reindex(idx)
+                .ffill(limit=PALM_LIMIT)
+            )
+
+            myr = (
+                v[["date", "myr="]]
+                .set_index("date")
+                .reindex(idx)
+                .ffill(limit=MYR_LIMIT)
+                .rename(columns={"myr=": "myr"})
+            )
+
+            # Join and keep only days where all three series exist
+            w = (
+                pd.concat([oil, palm, myr], axis=1)
+                .dropna(how="any")
+                .reset_index()
+                .rename(columns={"index": "date"})
+            )
+
+            if not w.empty:
+                # Convert to USD/ton
+                w["oleo_tons"] = w["boc1"] * TON_OLEO
+                w["palma_tons"] = w["fcpoc1"] / w["myr"]
+                w["oleo_palma"] = w["oleo_tons"] / w["palma_tons"]
+
+                views["oleo_palma"] = (
+                    w[["date", "oleo_palma"]]
+                    .sort_values("date")
+                    .reset_index(drop=True)
+                )
+
+    # --- Oil / Diesel ratio (C1) — Heating Oil ---------------------------
+    if {"boc1", "hoc1"}.issubset(df.columns):
+        v = df[["date", "boc1", "hoc1"]].dropna().copy()
+
+        v["oleo_tons"] = v["boc1"] * TON_OLEO
+        # hoc1 in USD/gal → USD/ton (using your original factors)
+        v["diesel_tons"] = v["hoc1"] / 0.003785 / 0.782
+        v["oleo_diesel"] = v["oleo_tons"] / v["diesel_tons"]
+
+        views["oleo_diesel"] = (
+            v[["date", "oleo_diesel"]]
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
+
+    # --- Oil Share (CME-style) -------------------------------------------
+    if {"boc1", "smc1"}.issubset(df.columns):
+        v = df[["date", "boc1", "smc1"]].dropna().copy()
+
+        v["oleo_revenue"] = v["boc1"] * 0.11
+        v["farelo_revenue"] = v["smc1"] * 0.022
+        v["crushing_revenue"] = v["oleo_revenue"] + v["farelo_revenue"]
+
+        # Avoid division by zero (edge cases)
+        v = v[v["crushing_revenue"] != 0].copy()
+        if not v.empty:
+            v["oil_share"] = v["oleo_revenue"] / v["crushing_revenue"]
+
+            views["oil_share"] = (
+                v[["date", "oil_share"]]
+                .sort_values("date")
+                .reset_index(drop=True)
+            )
+
+    return views
+
+# -----------------------------
+# 5) Exports
+# -----------------------------
+def load_convenience_views() -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    """
+    Load the full dataset and build all standard views, returning both.
+
+    This is a thin wrapper around `load_all()` and exists only to make the
+    module-level convenience variables below cleaner.
+
+    Returns
+    -------
+    data : pd.DataFrame
+        The enriched dataset returned by `load_all()`.
+
+    views : dict[str, pd.DataFrame]
+        Dictionary of all built views, typically containing:
+            - "oleo_farelo"
+            - "oleo_palma"
+            - "oleo_diesel"
+            - "oil_share"
+    """
+    return load_all()
+
+
+# Load once at import time (convenience for notebooks and scripts)
+df, _views = load_convenience_views()
+
+# Expose the most common views directly as module-level variables
 oleo_farelo = _views.get("oleo_farelo")
 oleo_palma  = _views.get("oleo_palma")
 oleo_diesel = _views.get("oleo_diesel")
-oil_share = _views.get("oil_share")
+oil_share   = _views.get("oil_share")
