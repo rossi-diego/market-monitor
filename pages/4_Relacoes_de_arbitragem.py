@@ -15,9 +15,9 @@ apply_theme()
 # Ratios disponíveis (df, coluna_y)
 # ============================================================
 RATIOS = {
-    "Óleo/Farelo": (oleo_farelo, "oleo/farelo"),
-    "Óleo/Palma":  (oleo_palma,  "oleo/palma"),
-    "Óleo/Diesel": (oleo_diesel, "oleo/diesel"),
+    "Óleo/Farelo": (oleo_farelo, "oleo_farelo"),
+    "Óleo/Palma":  (oleo_palma,  "oleo_palma"),
+    "Óleo/Diesel": (oleo_diesel, "oleo_diesel"),
     "Oil Share CME": (oil_share, "oil_share"),    
 }
 
