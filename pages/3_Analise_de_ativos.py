@@ -5,6 +5,9 @@ This page lets the user:
 - choose a date range,
 - configure a moving average window,
 and then plots Price + RSI using Plotly.
+
+If a second asset is selected for comparison, the chart switches to a
+price-only view (no moving average and no RSI), with two y-axes.
 """
 
 # ============================================================
@@ -12,6 +15,7 @@ and then plots Price + RSI using Plotly.
 # ============================================================
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
 
 from src.data_pipeline import df
 from src.visualization import plot_price_rsi_plotly
@@ -63,19 +67,48 @@ ASSETS_MAP = {
     "Bitcoin": "btc=",
 }
 
+# First asset
 close_col, _assets = asset_picker_dropdown(
     BASE,
     ASSETS_MAP,
     state_key="close_col",
-    # Optionally: favorites=["Óleo de soja (BOC1)", ...]
 )
 st.divider()
 
-# Derive a nice label for the selected asset (for the chart title)
+# Nice label for first asset
 asset_label = next(
     (label for label, col in ASSETS_MAP.items() if col == close_col),
     close_col,
 )
+
+# Optional: second asset for comparison
+section(
+    "Comparação",
+    "Opcional: selecione um segundo ativo para comparar no mesmo gráfico.",
+    "📊",
+)
+compare_two = st.checkbox(
+    "Comparar com segundo ativo",
+    value=False,
+    key="compare_two_assets",
+)
+
+second_col = None
+second_label = None
+
+if compare_two:
+    # Let user pick a second asset (can be any; if you don't want duplicates you can filter here)
+    second_col, _ = asset_picker_dropdown(
+        BASE,
+        ASSETS_MAP,
+        state_key="second_close_col",
+    )
+    second_label = next(
+        (label for label, col in ASSETS_MAP.items() if col == second_col),
+        second_col,
+    )
+
+st.divider()
 
 # ============================================================
 # Date range
@@ -91,12 +124,18 @@ start_date, end_date = date_range_picker(
 # Chart parameters
 # ============================================================
 section("Parâmetros", None, "⚙️")
-ma_window = ma_picker(
-    options=(20, 50, 200),
-    default=90,
-    state_key="ma_window",
-)
-st.caption(f"Média móvel selecionada: **{ma_window}** períodos")
+
+if not compare_two:
+    # Only show MA / RSI parameters in single-asset mode
+    ma_window = ma_picker(
+        options=(20, 50, 200),
+        default=90,
+        state_key="ma_window",
+    )
+    st.caption(f"Média móvel selecionada: **{ma_window}** períodos")
+else:
+    st.caption("Média móvel e RSI desativados no modo de comparação entre dois ativos.")
+
 st.divider()
 
 # ============================================================
@@ -105,41 +144,116 @@ st.divider()
 if close_col not in BASE.columns:
     st.warning(f"A coluna selecionada ('{close_col}') não está disponível nos dados.")
 else:
-    # Filter by date range
     date_series = BASE["date"].dt.date
     mask = date_series.between(start_date, end_date)
 
-    df_view = BASE.loc[mask, ["date", close_col]].dropna().copy()
+    # -------------------------
+    # Single-asset mode (Price + RSI)
+    # -------------------------
+    if not compare_two:
+        df_view = BASE.loc[mask, ["date", close_col]].dropna().copy()
 
-    if df_view.empty:
-        st.info("Sem dados no período selecionado.")
+        if df_view.empty:
+            st.info("Sem dados no período selecionado.")
+        else:
+            fig = plot_price_rsi_plotly(
+                df_view,
+                title=asset_label,
+                date_col="date",
+                close_col=close_col,
+                rsi_col=None,
+                rsi_fn=rsi,
+                rsi_len=14,
+                ma_window=ma_window,
+                show_bollinger=False,
+                bands_window=20,
+                bands_sigma=2.0,
+            )
+
+            fig.update_layout(
+                title=dict(
+                    text=asset_label,
+                    x=0.0,
+                    xanchor="left",
+                    y=0.98,
+                    yanchor="top",
+                    pad=dict(b=12),
+                ),
+                margin=dict(t=80),
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+    # -------------------------
+    # Two-asset mode (price-only comparison)
+    # -------------------------
     else:
-        # RSI is computed inside the plotting function (clean API)
-        fig = plot_price_rsi_plotly(
-            df_view,
-            title=asset_label,
-            date_col="date",
-            close_col=close_col,
-            rsi_col=None,
-            rsi_fn=rsi,
-            rsi_len=14,
-            ma_window=ma_window,
-            show_bollinger=False,
-            bands_window=20,
-            bands_sigma=2.0,
-        )
+        if not second_col:
+            st.info("Selecione um segundo ativo para comparação.")
+        elif second_col not in BASE.columns:
+            st.warning(
+                f"A coluna do segundo ativo selecionado ('{second_col}') não está disponível nos dados."
+            )
+        else:
+            cols = ["date", close_col, second_col]
+            df_view = BASE.loc[mask, cols].dropna(subset=["date"]).copy()
 
-        # Small tweak on title position and margin
-        fig.update_layout(
-            title=dict(
-                text=asset_label,
-                x=0.0,
-                xanchor="left",
-                y=0.98,
-                yanchor="top",
-                pad=dict(b=12),
-            ),
-            margin=dict(t=80),
-        )
+            if df_view.empty:
+                st.info("Sem dados no período selecionado.")
+            else:
+                fig = go.Figure()
 
-        st.plotly_chart(fig, use_container_width=True)
+                # First asset (left y-axis)
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_view["date"],
+                        y=df_view[close_col],
+                        mode="lines",
+                        name=asset_label,
+                        yaxis="y1",
+                    )
+                )
+
+                # Second asset (right y-axis)
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_view["date"],
+                        y=df_view[second_col],
+                        mode="lines",
+                        name=second_label,
+                        yaxis="y2",
+                    )
+                )
+
+                fig.update_layout(
+                    title=dict(
+                        text=f"{asset_label} vs {second_label}",
+                        x=0.0,
+                        xanchor="left",
+                        y=0.98,
+                        yanchor="top",
+                        pad=dict(b=12),
+                    ),
+                    xaxis=dict(title="Data"),
+                    yaxis=dict(
+                        title=asset_label,
+                        side="left",
+                        showgrid=True,
+                    ),
+                    yaxis2=dict(
+                        title=second_label,
+                        side="right",
+                        overlaying="y",
+                        showgrid=False,
+                    ),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="left",
+                        x=0.0,
+                    ),
+                    margin=dict(t=80),
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
