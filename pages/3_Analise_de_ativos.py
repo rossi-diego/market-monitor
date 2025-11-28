@@ -27,6 +27,8 @@ section("Selecione o ativo", "Favoritos abaixo, caso queira outro ativo, selecio
 ASSETS_MAP = {
     "Flat do óleo de soja (BRL - C1)": "oleo_flat_brl",
     "Flat do óleo de soja (USD - C1)": "oleo_flat_usd",
+    "Flat do farelo de soja (BRL - C1)": "farelo_flat_brl",
+    "Flat do farelo de soja (USD - C1)": "farelo_flat_usd",   
     "Óleo de soja (BOC1)": "boc1",
     "Farelo de soja (SMC1)": "smc1",
     "Óleo - Prêmio C1": "so-premp-c1",
