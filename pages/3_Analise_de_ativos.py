@@ -265,6 +265,13 @@ else:
                     key="normalize_compare",
                 )
 
+                st.caption(
+                    "A normalização ajusta cada série para que ambas comecem em 100 na primeira data selecionada. "
+                    "Isso facilita a comparação da variação percentual entre ativos com escalas diferentes."
+                )
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
                 yaxis_title_left = asset_label
                 yaxis_title_right = second_label
 
