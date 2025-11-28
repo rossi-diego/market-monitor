@@ -10,7 +10,7 @@ from src.utils import rsi
 # -----------------------------
 # 1) Load base e padronização
 # -----------------------------
-def load_base_csv(
+def load_data_csv(
     path: PathLike = DATA,
     possible_date_columns: tuple[str, ...] = ("date", "Date"),
 ) -> pd.DataFrame:
@@ -209,10 +209,10 @@ def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 # 4) Pipeline público
 # -----------------------------
 def load_all() -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
-    base = _load_base(DATA)
-    add_flats_inplace(base)      # <- MUTANDO o df original
-    views = build_views(base)
-    return base, views
+    data = _load_data_csv(DATA)
+    add_flats_inplace(data)
+    views = build_views(data)
+    return data, views
 
 # -----------------------------
 # 5) Exports de conveniência
