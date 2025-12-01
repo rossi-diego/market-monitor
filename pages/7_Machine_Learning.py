@@ -8,10 +8,8 @@ This page allows the user to:
 2. Choose which dataset columns will be used as FEATURES.
 3. Choose number of LAGS (0 to 10).
 4. Select ML model (Ridge, Random Forest, XGBoost).
-5. Choose the DATE RANGE used to train/test the model.
-6. View model performance vs actual (historical backtest).
-7. Inspect FEATURE IMPORTANCE (coeffs or importances).
-8. Produce OUT-OF-SAMPLE FORECAST for up to 45 future days.
+5. View model performance vs actual (historical backtest).
+6. Produce OUT-OF-SAMPLE FORECAST for up to 45 future days.
 
 The page also includes explanations for:
 - What are lags?
@@ -23,11 +21,9 @@ The page also includes explanations for:
 # ============================================================
 # Imports & Setup
 # ============================================================
-import numpy as np
 import pandas as pd
+import numpy as np
 import streamlit as st
-import plotly.graph_objects as go
-
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -40,6 +36,7 @@ except ImportError:
 
 from src.data_pipeline import df
 from src.utils import apply_theme, date_range_picker, section
+import plotly.graph_objects as go
 
 # Theme
 apply_theme()
@@ -57,39 +54,35 @@ BASE = BASE.sort_values("date")
 section(
     "🔮 Machine Learning Forecast",
     "Selecione um ativo, colunas de entrada e gere previsões automáticas.",
-    "🤖",
+    "🤖"
 )
 
-st.markdown(
-    """
+st.markdown("""
 ### 📘 Como funciona o modelo?
 
 **1) Lags:**  
-Lags são valores históricos da própria série da variável target.  
-Ex.: se o target for o óleo na bolsa:  
-- *Lag 1 = preço(t-1)*  
-- *Lag 2 = preço(t-2)*  
+Lags são valores históricos da própria série da nossa variável target, por exemplo:  
+- Lag 1 = preço de ontem  
+- Lag 2 = preço de anteontem  
 
-Eles ajudam o modelo a capturar **tendência, momentum e autocorrelação**.
+Eles ajudam o modelo a entender **tendência, momentum e autocorrelação**.
 
 **2) Features externas:**  
-São outras colunas do dataset (ex.: dólar, farelo, prêmio, palma...) que ajudam o modelo
-a explicar o comportamento do ativo target.
+Variáveis externas que podemos utilizar para auxiliar o aprendizado do modelo  
+(ex.: dólar, farelo, prêmio, palma...).
 
 **3) Multi-step forecasting:**  
-A previsão de até 45 dias é feita **iterativamente**:  
-o modelo prevê o dia seguinte, depois usa essa previsão como entrada para prever o próximo,
-e assim por diante.
+A previsão de até 45 dias é feita **iterativamente**, um dia de cada vez:  
+a previsão do dia seguinte vira entrada do dia posterior.
 
 **4) Métricas:**
-- **MAE** — erro médio absoluto (em unidades do preço).  
-- **RMSE** — raiz do erro quadrático médio (penaliza mais erros grandes).  
-- **R²** — fração da variância explicada pelo modelo (quanto mais próximo de 1, melhor).  
-  Pode ser **negativo** quando o modelo está pior do que simplesmente prever a média histórica.
+- **MAE** — erro médio absoluto (mesma unidade do preço).  
+- **RMSE** — erro quadrático médio (penaliza mais erros grandes).  
+- **R²** — variância explicada; pode ser **negativo** quando o modelo é pior
+  do que simplesmente prever a **média histórica**.
 
 ---
-"""
-)
+""")
 
 # ============================================================
 # 1. Target asset selection
@@ -98,7 +91,7 @@ section("🎯 Selecione o ativo para prever", None, "📈")
 
 valid_cols = [
     c for c in BASE.columns
-    if c != "date" and BASE[c].dtype != "object"
+    if c not in ["date"] and BASE[c].dtype != "object"
 ]
 
 target_col = st.selectbox("Escolha o ativo (Target)", valid_cols, index=0)
@@ -106,35 +99,17 @@ target_col = st.selectbox("Escolha o ativo (Target)", valid_cols, index=0)
 st.divider()
 
 # ============================================================
-# 2. Date range for model training/testing
-# ============================================================
-section("📆 Período de dados para treinar/testar o modelo", None, "📆")
-
-train_start, train_end = date_range_picker(
-    BASE["date"],
-    state_key="ml_train_range",
-    default_days=730,  # exemplo: ~2 anos por padrão
-)
-
-st.caption(
-    f"Período selecionado para o modelo: **{train_start}** até **{train_end}**."
-)
-st.divider()
-
-# ============================================================
-# 3. Feature selection
+# 2. Feature selection
 # ============================================================
 section("🧩 Selecione as features (variáveis explicativas)", None, "🧩")
 
-feature_candidates = [c for c in valid_cols if c != target_col]
-
 feature_cols = st.multiselect(
     "Selecione colunas para o modelo aprender",
-    options=feature_candidates,
-    default=feature_candidates[:3],
+    options=valid_cols,
+    default=[c for c in valid_cols if c != target_col][:3],
 )
 
-# At least 1 feature or lag must exist
+# At least 1 feature must exist
 if len(feature_cols) == 0:
     st.warning("Selecione ao menos uma feature.")
     st.stop()
@@ -142,29 +117,29 @@ if len(feature_cols) == 0:
 st.divider()
 
 # ============================================================
-# 4. Lag selection
+# 3. Lag selection
 # ============================================================
 section("⏳ Lags da série", "Máximo 10 lags", "⏳")
 
-num_lags = st.slider("Número de lags", min_value=0, max_value=10, value=5, step=1)
-
-st.markdown(
-    """
-**O que é lag?**
-
-- **Lag 1** = valor do target ontem  
-- **Lag 2** = valor do target anteontem  
-
-Mais lags → modelo enxerga mais histórico, mas:
-- aumenta a dimensão do problema,
-- aumenta o risco de **overfitting**.
-"""
+num_lags = st.slider(
+    "Número de lags",
+    min_value=0,
+    max_value=10,
+    value=5,
+    step=1,
 )
+
+st.markdown("""
+Pequena explicação:
+- **Lag 1** = preço de ontem  
+- **Lag 2** = preço de anteontem  
+- Mais lags → mais memória e complexidade → maior risco de overfitting  
+""")
 
 st.divider()
 
 # ============================================================
-# 5. ML Model selection
+# 4. ML Model selection
 # ============================================================
 section("🤖 Modelo de Machine Learning", None, "🤖")
 
@@ -173,7 +148,6 @@ models_dict = {
     "Random Forest": RandomForestRegressor(
         n_estimators=500,
         random_state=42,
-        n_jobs=-1,
     ),
 }
 if HAS_XGB:
@@ -184,7 +158,6 @@ if HAS_XGB:
         subsample=0.9,
         colsample_bytree=0.9,
         random_state=42,
-        n_jobs=-1,
     )
 
 model_label = st.selectbox("Selecione o modelo", list(models_dict.keys()))
@@ -193,7 +166,7 @@ model = models_dict[model_label]
 st.divider()
 
 # ============================================================
-# 6. Prediction horizon
+# 5. Prediction horizon
 # ============================================================
 section("📅 Horizonte de previsão", None, "📅")
 
@@ -204,172 +177,131 @@ horizon = st.slider(
     value=30,
 )
 
-st.caption(
-    "A previsão é feita de forma **multi-step**: "
-    "cada dia previsto alimenta o modelo para prever o próximo dia."
-)
 st.divider()
 
 # ============================================================
-# Prepare dataset (filter period + lags + features)
+# 6. Normalização (boa prática opcional)
 # ============================================================
-# Filtra pelo período escolhido
-mask_period = (BASE["date"].dt.date >= train_start) & (BASE["date"].dt.date <= train_end)
-df_ml = BASE.loc[mask_period, ["date", target_col] + feature_cols].copy()
+section("⚙️ Configuração avançada (normalização da target)", None, "🧪")
 
-if df_ml.empty:
-    st.error("Não há dados no período selecionado para treinar o modelo.")
-    st.stop()
+normalize_target = st.checkbox(
+    "Normalizar a variável alvo durante o treino (z-score)",
+    value=True,
+    help=(
+        "Subtrai a média e divide pelo desvio padrão no conjunto de treino. "
+        "Ajuda alguns modelos a treinar de forma mais estável. "
+        "As métricas e gráficos são SEMPRE mostrados em unidades originais."
+    ),
+)
 
-# Gera colunas de lag do target
+st.caption(
+    "A normalização é aplicada apenas internamente na etapa de treino. "
+    "As previsões e métricas são sempre convertidas de volta para o nível de preço original."
+)
+
+st.divider()
+
+# ============================================================
+# Prepare dataset (lags + features)
+# ============================================================
+df_ml = BASE[["date", target_col] + feature_cols].copy()
+
+# Generate lag columns
 for lag in range(1, num_lags + 1):
     df_ml[f"{target_col}_lag{lag}"] = df_ml[target_col].shift(lag)
 
-# Remove linhas com NaN (causados pelos lags)
+# Drop rows with NaN caused by lags
 df_ml = df_ml.dropna().reset_index(drop=True)
 
-if len(df_ml) < 50:
-    st.warning(
-        f"Poucos dados ({len(df_ml)} linhas) após aplicar período e lags. "
-        "Considere aumentar o período ou reduzir o número de lags."
-    )
+if df_ml.empty:
+    st.warning("Não há dados suficientes após a criação de lags. Tente reduzir o número de lags.")
+    st.stop()
 
-# Monta X, y
+# Build X, y
 X = df_ml.drop(columns=["date", target_col])
 y = df_ml[target_col]
 
-if len(df_ml) < 10:
-    st.error("Dados insuficientes para treinar o modelo após filtragem e lags.")
-    st.stop()
-
-# Train-test split (80/20 temporal)
+# Train-test split (80/20)
 split = int(len(df_ml) * 0.80)
 X_train, X_test = X.iloc[:split], X.iloc[split:]
 y_train, y_test = y.iloc[:split], y.iloc[split:]
 dates_test = df_ml["date"].iloc[split:]
 
-# Fit model
-model.fit(X_train, y_train)
+# ============================================================
+# Fit model (with optional target normalization)
+# ============================================================
+if normalize_target:
+    y_mean = y_train.mean()
+    y_std = y_train.std()
 
-# Predict on historical test data
-pred_test = model.predict(X_test)
+    # Evita divisão por zero em caso de série quase constante
+    if y_std == 0:
+        y_std = 1.0
 
-# Metrics
-mae = mean_absolute_error(y_test, pred_test)
-rmse = np.sqrt(mean_squared_error(y_test, pred_test))
-r2 = r2_score(y_test, pred_test)
+    y_train_scaled = (y_train - y_mean) / y_std
+
+    # Treina no espaço normalizado
+    model.fit(X_train, y_train_scaled)
+
+    # Predição histórica (em espaço normalizado)
+    pred_test_scaled = model.predict(X_test)
+
+    # Converte de volta para unidade original
+    pred_test = pred_test_scaled * y_std + y_mean
+    y_test_true = y_test  # já em unidade original
+else:
+    # Sem normalização de target
+    model.fit(X_train, y_train)
+    pred_test = model.predict(X_test)
+    y_test_true = y_test
 
 # ============================================================
-# 7. Show metrics
+# Show metrics (sempre em unidade original)
 # ============================================================
-section("📊 Métricas do modelo (backtest histórico)", None, "📊")
+mae = mean_absolute_error(y_test_true, pred_test)
+rmse = np.sqrt(mean_squared_error(y_test_true, pred_test))
+r2 = r2_score(y_test_true, pred_test)
 
-col_m1, col_m2, col_m3 = st.columns(3)
-with col_m1:
-    st.metric("MAE", f"{mae:.3f}")
-with col_m2:
-    st.metric("RMSE", f"{rmse:.3f}")
-with col_m3:
-    st.metric("R²", f"{r2:.3f}")
+section("📊 Métricas do modelo", None, "📊")
 
-st.markdown(
-    """
+st.write(f"**MAE:** {mae:.3f}")
+st.write(f"**RMSE:** {rmse:.3f}")
+st.write(f"**R²:** {r2:.3f}")
+
+st.markdown("""
 **Interpretação rápida:**
 
-- **MAE** → erro médio absoluto (quanto menor, melhor).  
-- **RMSE** → penaliza mais erros grandes; útil para ver se há outliers de erro.  
-- **R² negativo** → o modelo está pior do que simplesmente prever a média histórica.
-"""
-)
+- **MAE** → erro médio absoluto (quanto o modelo erra em média, em unidades do preço).  
+- **RMSE** → semelhante ao MAE, mas penaliza mais erros grandes.  
+- **R² negativo** → o modelo foi pior que simplesmente prever a **média histórica**.  
+""")
 
 st.divider()
 
 # ============================================================
-# 8. Feature importance / coefficients
-# ============================================================
-section("🧮 Importância das variáveis (Feature Importance)", None, "🧮")
-
-feature_names = list(X.columns)
-importances = None
-importance_type = None
-
-# Linear modelo (Ridge): coeficientes
-if hasattr(model, "coef_"):
-    coefs = np.array(model.coef_).ravel()
-    importances = coefs
-    importance_type = "coef"
-
-# Tree-based (RandomForest, XGBoost): feature_importances_
-elif hasattr(model, "feature_importances_"):
-    importances = np.array(model.feature_importances_)
-    importance_type = "imp"
-
-if importances is not None:
-    imp_df = pd.DataFrame(
-        {
-            "feature": feature_names,
-            "importance": importances,
-            "abs_importance": np.abs(importances),
-        }
-    ).sort_values("abs_importance", ascending=False)
-
-    st.markdown(
-        """
-Para modelos lineares (Ridge), os **coeficientes** indicam o efeito marginal:
-- sinal (+/-) → direção do impacto
-- magnitude → força do impacto absoluto
-
-Para modelos baseados em árvores (Random Forest / XGBoost), a `feature_importances_` mostra
-a importância relativa de cada variável na redução de erro do modelo.
-"""
-    )
-
-    # Gráfico de barras (top 20)
-    top_n = min(20, len(imp_df))
-    top_imp = imp_df.head(top_n)
-
-    fig_imp = go.Figure(
-        data=go.Bar(
-            x=top_imp["feature"],
-            y=top_imp["importance"],
-        )
-    )
-    fig_imp.update_layout(
-        title="Importância das Features (top 20)",
-        xaxis_title="Feature",
-        yaxis_title="Coeficiente" if importance_type == "coef" else "Importância relativa",
-        xaxis_tickangle=-45,
-        margin=dict(b=120, t=60),
-    )
-    st.plotly_chart(fig_imp, use_container_width=True)
-
-    st.dataframe(
-        imp_df[["feature", "importance"]].reset_index(drop=True),
-        use_container_width=True,
-        height=400,
-    )
-else:
-    st.info(
-        "O modelo selecionado não expõe coeficientes nem `feature_importances_`. "
-        "Por isso, a importância de features não está disponível."
-    )
-
-st.divider()
-
-# ============================================================
-# 9. Plot historical performance (real vs predicted)
+# Plot historical performance (real vs predicted)
 # ============================================================
 section("📈 Desempenho histórico (real vs previsto)", None, "📉")
 
 fig_hist = go.Figure()
 fig_hist.add_trace(
-    go.Scatter(x=dates_test, y=y_test, mode="lines", name="Real")
+    go.Scatter(
+        x=dates_test,
+        y=y_test_true,
+        mode="lines",
+        name="Real",
+    )
 )
 fig_hist.add_trace(
-    go.Scatter(x=dates_test, y=pred_test, mode="lines", name="Previsto")
+    go.Scatter(
+        x=dates_test,
+        y=pred_test,
+        mode="lines",
+        name="Previsto (modelo)",
+    )
 )
 fig_hist.update_layout(
-    title="Histórico: Real vs Previsto (conjunto de teste)",
+    title="Histórico: Real vs Previsto",
     xaxis_title="Data",
     yaxis_title=target_col,
 )
@@ -378,7 +310,7 @@ st.plotly_chart(fig_hist, use_container_width=True)
 st.divider()
 
 # ============================================================
-# 10. Multi-step OUT-OF-SAMPLE forecast
+# Multi-step OUT-OF-SAMPLE forecast
 # ============================================================
 section("🔮 Forecast Futuro", f"Prevendo {horizon} dias à frente", "🔮")
 
@@ -386,25 +318,36 @@ last_row = df_ml.iloc[-1:].copy()
 future_dates = pd.date_range(
     start=df_ml["date"].iloc[-1] + pd.Timedelta(days=1),
     periods=horizon,
-    freq="D",
 )
 
 forecast_values = []
 
-# current_row contém apenas as features + lags (sem date/target)
-current_row = last_row.drop(columns=["date", target_col])
+# current_row: features + lags (sem a coluna date/target)
+current_row = last_row.drop(columns=["date", target_col]).copy()
 
 for _ in range(horizon):
-    next_pred = model.predict(current_row)[0]
+    # Previsão no espaço certo (normalizado ou não)
+    if normalize_target:
+        pred_scaled = model.predict(current_row)[0]
+        next_pred = pred_scaled * y_std + y_mean  # volta para unidade original
+    else:
+        next_pred = model.predict(current_row)[0]
+
     forecast_values.append(next_pred)
 
-    # Atualiza lags manualmente (apenas se houver lags)
+    # Atualiza lags com o valor PREVISTO em unidade original
     if num_lags > 0:
         for i in range(num_lags, 1, -1):
-            current_row[f"{target_col}_lag{i}"] = current_row[f"{target_col}_lag{i-1}"]
-        current_row[f"{target_col}_lag1"] = next_pred
+            lag_col_i = f"{target_col}_lag{i}"
+            lag_col_prev = f"{target_col}_lag{i-1}"
+            if lag_col_i in current_row.columns and lag_col_prev in current_row.columns:
+                current_row[lag_col_i] = current_row[lag_col_prev]
+        # lag1 recebe a nova previsão (em unidade original)
+        lag_col_1 = f"{target_col}_lag1"
+        if lag_col_1 in current_row.columns:
+            current_row[lag_col_1] = next_pred
 
-# Plot forecast
+# Plot forecast (sempre em unidade original)
 fig_f = go.Figure()
 fig_f.add_trace(
     go.Scatter(
@@ -415,7 +358,7 @@ fig_f.add_trace(
     )
 )
 fig_f.update_layout(
-    title=f"Previsão para {target_col} – {horizon} dias à frente",
+    title=f"Previsão para {target_col} – {horizon} dias",
     xaxis_title="Data",
     yaxis_title=target_col,
 )
