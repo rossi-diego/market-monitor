@@ -281,44 +281,41 @@ st.markdown("""
 
 st.divider()
 
+
 # ============================================================
-# Feature Importances / Coefficients
+# Feature Importance (tabela)
 # ============================================================
-section("📌 Importância das Features", 
-         "Veja quais variáveis o modelo considerou mais relevantes.", 
-         "📌")
+section("🧠 Importância das Features", None, "🧠")
 
-# Only show if model supports feature importance or coefficients
-if model_label == "Ridge Regression":
-    # Ridge -> coefficients
-    importances = pd.DataFrame({
-        "Feature": X_train.columns,
-        "Importance": model.coef_
-    })
+importance_values = None
 
-elif model_label == "Random Forest":
-    importances = pd.DataFrame({
-        "Feature": X_train.columns,
-        "Importance": model.feature_importances_
-    })
+# Modelos tipo árvore (Random Forest, XGBoost)
+if hasattr(model, "feature_importances_"):
+    importance_values = model.feature_importances_
 
-elif model_label == "XGBoost" and HAS_XGB:
-    importances = pd.DataFrame({
-        "Feature": X_train.columns,
-        "Importance": model.feature_importances_
-    })
+# Modelos lineares (Ridge) – usamos o valor absoluto dos coeficientes
+elif hasattr(model, "coef_"):
+    coef = model.coef_
+    # coef pode ser shape (n_features,) ou (1, n_features)
+    importance_values = np.abs(np.ravel(coef))
 
+if importance_values is None:
+    st.info("O modelo selecionado não expõe importância de features de forma direta.")
 else:
-    importances = None
+    fi_df = pd.DataFrame(
+        {
+            "Feature": feature_names,
+            "Importance": importance_values,
+        }
+    ).sort_values("Importance", ascending=False)
 
-if importances is None:
-    st.info("O modelo selecionado não fornece importâncias interpretáveis.")
-else:
-    importances = importances.sort_values("Importance", ascending=False)
-    st.dataframe(
-        importances.style.format({"Importance": "{:.5f}"}),
-        use_container_width=True
+    st.caption(
+        "A coluna **Importance** mostra o peso relativo de cada feature no modelo "
+        "(para modelos lineares é o valor absoluto do coeficiente; para florestas/XGBoost, "
+        "vem do atributo `feature_importances_`)."
     )
+
+    st.dataframe(fi_df, use_container_width=True)
 
 st.divider()
 
