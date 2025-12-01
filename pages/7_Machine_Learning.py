@@ -16,6 +16,7 @@ The page also includes explanations for:
 - How the model learns temporal structure.
 - What is multi-step forecasting?
 - What MAE, RMSE and R² represent.
+- What normalization/standardization is and why we use it.
 """
 
 # ============================================================
@@ -24,9 +25,11 @@ The page also includes explanations for:
 import pandas as pd
 import numpy as np
 import streamlit as st
+
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.preprocessing import StandardScaler
 
 try:
     from xgboost import XGBRegressor
@@ -60,27 +63,26 @@ section(
 st.markdown("""
 ### 📘 Como funciona o modelo?
 
-**1) Lags:**  
-Lags são valores históricos da própria série da nossa variável target, por exemplo:  
-- Lag 1 = preço de ontem  
-- Lag 2 = preço de anteontem  
+**1) Lags**  
+Lags são valores históricos da própria série da variável target, por exemplo, se selecionarmos o óleo na bolsa:  
+- *lag 1* = preço de ontem (t-1)  
+- *lag 2* = preço de anteontem (t-2)  
 
-Eles ajudam o modelo a entender **tendência, momentum e autocorrelação**.
+Eles ajudam o modelo a capturar **tendência, momentum e autocorrelação**.
 
-**2) Features externas:**  
-Variáveis externas que podemos utilizar para auxiliar o aprendizado do modelo  
-(ex.: dólar, farelo, prêmio, palma...).
+**2) Features externas**  
+Variáveis externas que o modelo usa como entrada, por exemplo: dólar, farelo, prêmio, palma etc.  
+Elas ajudam a explicar movimentos do target.
 
-**3) Multi-step forecasting:**  
+**3) Multi-step forecasting**  
 A previsão de até 45 dias é feita **iterativamente**, um dia de cada vez:  
-a previsão do dia seguinte vira entrada do dia posterior.
+A previsão do dia seguinte entra como lag na previsão do próximo dia, e assim por diante.
 
-**4) Métricas:**
-- **MAE** — erro médio absoluto (mesma unidade do preço).  
-- **RMSE** — erro quadrático médio (penaliza mais erros grandes).  
-- **R²** — variância explicada; pode ser **negativo** quando o modelo é pior
-  do que simplesmente prever a **média histórica**.
-
+**4) Métricas**
+- **MAE** — erro médio absoluto (em unidades do preço).  
+- **RMSE** — raiz do erro quadrático médio (penaliza mais erros grandes).  
+- **R²** — fração da variância explicada pelo modelo (quanto mais próximo de 1, melhor);  
+  pode ser **negativo** quando o modelo está pior do que simplesmente prever a média.
 ---
 """)
 
@@ -89,10 +91,7 @@ a previsão do dia seguinte vira entrada do dia posterior.
 # ============================================================
 section("🎯 Selecione o ativo para prever", None, "📈")
 
-valid_cols = [
-    c for c in BASE.columns
-    if c not in ["date"] and BASE[c].dtype != "object"
-]
+valid_cols = [c for c in BASE.columns if c not in ["date"] and BASE[c].dtype != "object"]
 
 target_col = st.selectbox("Escolha o ativo (Target)", valid_cols, index=0)
 
@@ -106,10 +105,10 @@ section("🧩 Selecione as features (variáveis explicativas)", None, "🧩")
 feature_cols = st.multiselect(
     "Selecione colunas para o modelo aprender",
     options=valid_cols,
-    default=[c for c in valid_cols if c != target_col][:3],
+    default=[c for c in valid_cols if c != target_col][:3]
 )
 
-# At least 1 feature must exist
+# At least 1 feature or lag must exist
 if len(feature_cols) == 0:
     st.warning("Selecione ao menos uma feature.")
     st.stop()
@@ -121,19 +120,13 @@ st.divider()
 # ============================================================
 section("⏳ Lags da série", "Máximo 10 lags", "⏳")
 
-num_lags = st.slider(
-    "Número de lags",
-    min_value=0,
-    max_value=10,
-    value=5,
-    step=1,
-)
+num_lags = st.slider("Número de lags", min_value=0, max_value=10, value=5, step=1)
 
 st.markdown("""
 Pequena explicação:
 - **Lag 1** = preço de ontem  
 - **Lag 2** = preço de anteontem  
-- Mais lags → mais memória e complexidade → maior risco de overfitting  
+- Mais lags → modelo vê mais histórico, mas pode aumentar complexidade e overfitting.
 """)
 
 st.divider()
@@ -145,10 +138,7 @@ section("🤖 Modelo de Machine Learning", None, "🤖")
 
 models_dict = {
     "Ridge Regression": Ridge(),
-    "Random Forest": RandomForestRegressor(
-        n_estimators=500,
-        random_state=42,
-    ),
+    "Random Forest": RandomForestRegressor(n_estimators=500, random_state=42),
 }
 if HAS_XGB:
     models_dict["XGBoost"] = XGBRegressor(
@@ -180,24 +170,30 @@ horizon = st.slider(
 st.divider()
 
 # ============================================================
-# 6. Normalização (boa prática opcional)
+# 6. Normalização (boas práticas)
 # ============================================================
-section("⚙️ Configuração avançada (normalização da target)", None, "🧪")
+section("⚖️ Normalização dos dados", None, "⚖️")
 
-normalize_target = st.checkbox(
-    "Normalizar a variável alvo durante o treino (z-score)",
+normalize = st.checkbox(
+    "Normalizar features e target (z-score: média 0, desvio padrão 1)",
     value=True,
     help=(
-        "Subtrai a média e divide pelo desvio padrão no conjunto de treino. "
-        "Ajuda alguns modelos a treinar de forma mais estável. "
-        "As métricas e gráficos são SEMPRE mostrados em unidades originais."
+        "Aplica padronização (StandardScaler) em TODAS as features e no target "
+        "antes de treinar o modelo. As previsões e métricas são sempre exibidas "
+        "na escala original (desnormalizadas)."
     ),
 )
 
-st.caption(
-    "A normalização é aplicada apenas internamente na etapa de treino. "
-    "As previsões e métricas são sempre convertidas de volta para o nível de preço original."
-)
+st.markdown("""
+**O que é essa normalização?**
+
+- Usamos **StandardScaler**, que transforma cada coluna em:  
+  \\( z = (x - \\text{média}) / \\text{desvio padrão} \\).  
+- Isso ajuda modelos como **Ridge** e **XGBoost** a treinarem de forma mais estável,  
+  especialmente quando as features têm escalas muito diferentes (ex.: dólar, CBOT, prêmios).
+- Mesmo normalizando o **target**, as **métricas e gráficos são sempre mostrados na escala original**,  
+  pois aplicamos a transformação inversa (desnormalização) nas previsões antes de exibir.
+""")
 
 st.divider()
 
@@ -206,74 +202,81 @@ st.divider()
 # ============================================================
 df_ml = BASE[["date", target_col] + feature_cols].copy()
 
-# Generate lag columns
+# Generate lag columns (on target)
 for lag in range(1, num_lags + 1):
     df_ml[f"{target_col}_lag{lag}"] = df_ml[target_col].shift(lag)
 
-# Drop rows with NaN caused by lags
+# Drop rows with NaN caused by lags or missing features
 df_ml = df_ml.dropna().reset_index(drop=True)
 
 if df_ml.empty:
-    st.warning("Não há dados suficientes após a criação de lags. Tente reduzir o número de lags.")
+    st.error("Dados insuficientes após aplicar lags e filtrar NaNs.")
     st.stop()
 
 # Build X, y
 X = df_ml.drop(columns=["date", target_col])
 y = df_ml[target_col]
 
-# Train-test split (80/20)
+# Train-test split (80/20, temporal)
 split = int(len(df_ml) * 0.80)
-X_train, X_test = X.iloc[:split], X.iloc[split:]
-y_train, y_test = y.iloc[:split], y.iloc[split:]
+X_train_raw, X_test_raw = X.iloc[:split].copy(), X.iloc[split:].copy()
+y_train_raw, y_test_raw = y.iloc[:split].copy(), y.iloc[split:].copy()
 dates_test = df_ml["date"].iloc[split:]
 
-# ============================================================
-# Fit model (with optional target normalization)
-# ============================================================
-if normalize_target:
-    y_mean = y_train.mean()
-    y_std = y_train.std()
+# Scalers (only if normalize=True)
+x_scaler = None
+y_scaler = None
 
-    # Evita divisão por zero em caso de série quase constante
-    if y_std == 0:
-        y_std = 1.0
+if normalize:
+    x_scaler = StandardScaler()
+    X_train = x_scaler.fit_transform(X_train_raw)
+    X_test = x_scaler.transform(X_test_raw)
 
-    y_train_scaled = (y_train - y_mean) / y_std
+    y_scaler = StandardScaler()
+    y_train_scaled = y_scaler.fit_transform(
+        y_train_raw.values.reshape(-1, 1)
+    ).ravel()
 
-    # Treina no espaço normalizado
+    # Fit on normalized data
     model.fit(X_train, y_train_scaled)
 
-    # Predição histórica (em espaço normalizado)
+    # Predict on normalized space, then invert back to original scale
     pred_test_scaled = model.predict(X_test)
+    pred_test = y_scaler.inverse_transform(
+        pred_test_scaled.reshape(-1, 1)
+    ).ravel()
 
-    # Converte de volta para unidade original
-    pred_test = pred_test_scaled * y_std + y_mean
-    y_test_true = y_test  # já em unidade original
+    y_test_true = y_test_raw.copy()
+
 else:
-    # Sem normalização de target
+    # No normalization: use raw values directly
+    X_train = X_train_raw
+    X_test = X_test_raw
+    y_train = y_train_raw
+
     model.fit(X_train, y_train)
     pred_test = model.predict(X_test)
-    y_test_true = y_test
+    y_test_true = y_test_raw.copy()
 
 # ============================================================
-# Show metrics (sempre em unidade original)
+# Show metrics
 # ============================================================
+section("📊 Métricas do modelo", None, "📊")
+
 mae = mean_absolute_error(y_test_true, pred_test)
 rmse = np.sqrt(mean_squared_error(y_test_true, pred_test))
 r2 = r2_score(y_test_true, pred_test)
 
-section("📊 Métricas do modelo", None, "📊")
-
-st.write(f"**MAE:** {mae:.3f}")
+st.write(f"**MAE:**  {mae:.3f}")
 st.write(f"**RMSE:** {rmse:.3f}")
-st.write(f"**R²:** {r2:.3f}")
+st.write(f"**R²:**   {r2:.3f}")
 
 st.markdown("""
 **Interpretação rápida:**
 
-- **MAE** → erro médio absoluto (quanto o modelo erra em média, em unidades do preço).  
-- **RMSE** → semelhante ao MAE, mas penaliza mais erros grandes.  
-- **R² negativo** → o modelo foi pior que simplesmente prever a **média histórica**.  
+- **MAE** → erro médio absoluto (em unidades do target).  
+- **RMSE** → penaliza mais os erros grandes.  
+- **R² negativo** → o modelo foi pior do que simplesmente prever a MÉDIA do período.
 """)
 
 st.divider()
@@ -285,20 +288,10 @@ section("📈 Desempenho histórico (real vs previsto)", None, "📉")
 
 fig_hist = go.Figure()
 fig_hist.add_trace(
-    go.Scatter(
-        x=dates_test,
-        y=y_test_true,
-        mode="lines",
-        name="Real",
-    )
+    go.Scatter(x=dates_test, y=y_test_true, mode="lines", name="Real")
 )
 fig_hist.add_trace(
-    go.Scatter(
-        x=dates_test,
-        y=pred_test,
-        mode="lines",
-        name="Previsto (modelo)",
-    )
+    go.Scatter(x=dates_test, y=pred_test, mode="lines", name="Previsto")
 )
 fig_hist.update_layout(
     title="Histórico: Real vs Previsto",
@@ -314,6 +307,7 @@ st.divider()
 # ============================================================
 section("🔮 Forecast Futuro", f"Prevendo {horizon} dias à frente", "🔮")
 
+# Usamos a última linha disponível (com lags já preenchidos) como ponto de partida
 last_row = df_ml.iloc[-1:].copy()
 future_dates = pd.date_range(
     start=df_ml["date"].iloc[-1] + pd.Timedelta(days=1),
@@ -322,32 +316,33 @@ future_dates = pd.date_range(
 
 forecast_values = []
 
-# current_row: features + lags (sem a coluna date/target)
+# Linha de features (sem date / target) em escala original
 current_row = last_row.drop(columns=["date", target_col]).copy()
 
 for _ in range(horizon):
-    # Previsão no espaço certo (normalizado ou não)
-    if normalize_target:
-        pred_scaled = model.predict(current_row)[0]
-        next_pred = pred_scaled * y_std + y_mean  # volta para unidade original
+    # 1) Prepara features para previsão (aplica scaler se necessário)
+    if normalize and x_scaler is not None and y_scaler is not None:
+        current_x = x_scaler.transform(current_row)
+        next_pred_scaled = model.predict(current_x)[0]
+        # Volta para a escala original do target
+        next_pred = y_scaler.inverse_transform(
+            np.array([[next_pred_scaled]])
+        )[0, 0]
     else:
         next_pred = model.predict(current_row)[0]
 
     forecast_values.append(next_pred)
 
-    # Atualiza lags com o valor PREVISTO em unidade original
+    # 2) Atualiza apenas os lags do target na linha atual (em escala ORIGINAL)
     if num_lags > 0:
         for i in range(num_lags, 1, -1):
-            lag_col_i = f"{target_col}_lag{i}"
-            lag_col_prev = f"{target_col}_lag{i-1}"
-            if lag_col_i in current_row.columns and lag_col_prev in current_row.columns:
-                current_row[lag_col_i] = current_row[lag_col_prev]
-        # lag1 recebe a nova previsão (em unidade original)
-        lag_col_1 = f"{target_col}_lag1"
-        if lag_col_1 in current_row.columns:
-            current_row[lag_col_1] = next_pred
+            current_row[f"{target_col}_lag{i}"] = current_row[
+                f"{target_col}_lag{i-1}"
+            ]
+        current_row[f"{target_col}_lag1"] = next_pred
+    # As outras features (externas) permanecem constantes com o último valor conhecido.
 
-# Plot forecast (sempre em unidade original)
+# Plot forecast (sempre em escala original)
 fig_f = go.Figure()
 fig_f.add_trace(
     go.Scatter(
