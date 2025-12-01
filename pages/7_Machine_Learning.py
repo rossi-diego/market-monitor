@@ -217,6 +217,8 @@ if df_ml.empty:
 X = df_ml.drop(columns=["date", target_col])
 y = df_ml[target_col]
 
+feature_names = X.columns.tolist()
+
 # Train-test split (80/20, temporal)
 split = int(len(df_ml) * 0.80)
 X_train_raw, X_test_raw = X.iloc[:split].copy(), X.iloc[split:].copy()
@@ -318,6 +320,7 @@ else:
     st.dataframe(fi_df, use_container_width=True)
 
 st.divider()
+
 
 
 # ============================================================
