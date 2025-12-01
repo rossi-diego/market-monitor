@@ -188,7 +188,7 @@ st.markdown("""
 **O que é essa normalização?**
 
 - Usamos **StandardScaler**, que transforma cada coluna em:  
-  \\( z = (x - \\text{média}) / \\text{desvio padrão} \\).  
+  \\( z = (x - \\{média}) / \\{desvio padrão} \\).  
 - Isso ajuda modelos como **Ridge** e **XGBoost** a treinarem de forma mais estável,  
   especialmente quando as features têm escalas muito diferentes (ex.: dólar, CBOT, prêmios).
 - Mesmo normalizando o **target**, as **métricas e gráficos são sempre mostrados na escala original**,  
@@ -280,6 +280,48 @@ st.markdown("""
 """)
 
 st.divider()
+
+# ============================================================
+# Feature Importances / Coefficients
+# ============================================================
+section("📌 Importância das Features", 
+         "Veja quais variáveis o modelo considerou mais relevantes.", 
+         "📌")
+
+# Only show if model supports feature importance or coefficients
+if model_label == "Ridge Regression":
+    # Ridge -> coefficients
+    importances = pd.DataFrame({
+        "Feature": X_train.columns,
+        "Importance": model.coef_
+    })
+
+elif model_label == "Random Forest":
+    importances = pd.DataFrame({
+        "Feature": X_train.columns,
+        "Importance": model.feature_importances_
+    })
+
+elif model_label == "XGBoost" and HAS_XGB:
+    importances = pd.DataFrame({
+        "Feature": X_train.columns,
+        "Importance": model.feature_importances_
+    })
+
+else:
+    importances = None
+
+if importances is None:
+    st.info("O modelo selecionado não fornece importâncias interpretáveis.")
+else:
+    importances = importances.sort_values("Importance", ascending=False)
+    st.dataframe(
+        importances.style.format({"Importance": "{:.5f}"}),
+        use_container_width=True
+    )
+
+st.divider()
+
 
 # ============================================================
 # Plot historical performance (real vs predicted)
