@@ -198,9 +198,36 @@ st.markdown("""
 st.divider()
 
 # ============================================================
+# 7. Data range to use for the model
+# ============================================================
+section(
+    "📆 Período considerado pelo modelo",
+    "Selecione o intervalo de datas que será usado para treinar e avaliar o modelo.",
+    "📆",
+)
+
+start_model_date, end_model_date = date_range_picker(
+    BASE["date"],
+    state_key="ml_train_range",
+    default_days=365 * 3,  # por exemplo, últimos 3 anos
+)
+
+mask_model = (BASE["date"].dt.date >= start_model_date) & (
+    BASE["date"].dt.date <= end_model_date
+)
+BASE_RANGE = BASE.loc[mask_model].copy()
+
+if BASE_RANGE.empty:
+    st.error("Sem dados no período selecionado para treinar o modelo.")
+    st.stop()
+
+st.divider()
+
+
+# ============================================================
 # Prepare dataset (lags + features)
 # ============================================================
-df_ml = BASE[["date", target_col] + feature_cols].copy()
+df_ml = BASE_RANGE[["date", target_col] + feature_cols].copy()
 
 # Generate lag columns (on target)
 for lag in range(1, num_lags + 1):
