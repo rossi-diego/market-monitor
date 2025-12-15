@@ -64,6 +64,8 @@ ASSETS_MAP = {
     "Heating Oil (HOC1)": "hoc1",
     "Dólar": "brl=",
     "Bitcoin": "btc=",
+    "Gold": "gcc1",
+    "Silver": "sagc1",
 }
 
 # First asset
