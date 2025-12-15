@@ -306,7 +306,7 @@ else:
                 # --- Plot two-asset comparison (price-only) ---
                 fig = go.Figure()
 
-                # First asset (left y-axis)
+                # traces (sempre no mesmo eixo quando normalizado)
                 fig.add_trace(
                     go.Scatter(
                         x=df_view["date"],
@@ -317,18 +317,17 @@ else:
                     )
                 )
 
-                # Second asset (right y-axis)
                 fig.add_trace(
                     go.Scatter(
                         x=df_view["date"],
                         y=df_view[second_col],
                         mode="lines",
                         name=second_label,
-                        yaxis="y2",
+                        yaxis=("y1" if normalize else "y2"),
                     )
                 )
 
-                fig.update_layout(
+                layout = dict(
                     title=dict(
                         text=f"{asset_label} vs {second_label}",
                         x=0.0,
@@ -339,15 +338,9 @@ else:
                     ),
                     xaxis=dict(title="Data"),
                     yaxis=dict(
-                        title=yaxis_title_left,
+                        title=(yaxis_title_left if not normalize else "Índice (início do período = 100)"),
                         side="left",
                         showgrid=True,
-                    ),
-                    yaxis2=dict(
-                        title=yaxis_title_right,
-                        side="right",
-                        overlaying="y",
-                        showgrid=False,
                     ),
                     legend=dict(
                         orientation="h",
@@ -358,5 +351,16 @@ else:
                     ),
                     margin=dict(t=80),
                 )
+
+                # só cria yaxis2 quando NÃO estiver normalizado
+                if not normalize:
+                    layout["yaxis2"] = dict(
+                        title=yaxis_title_right,
+                        side="right",
+                        overlaying="y",
+                        showgrid=False,
+                    )
+
+                fig.update_layout(**layout)
 
                 st.plotly_chart(fig, use_container_width=True)
