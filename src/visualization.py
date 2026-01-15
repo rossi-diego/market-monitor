@@ -154,22 +154,45 @@ def plot_ratio_std_plotly(
             row=1, col=1
         )
 
-    # Máx/Mín + marcadores
-    fig.add_hline(y=y_max, line_dash="dot", line_width=1.5,
-                  annotation_text=f"Máx {y_max:.2f}", annotation_position="top left",
-                  row=1, col=1)
-    fig.add_hline(y=y_min, line_dash="dot", line_width=1.5,
-                  annotation_text=f"Mín {y_min:.2f}", annotation_position="bottom left",
+    # Máx/Mín + marcadores com posicionamento inteligente
+    # Calcula espaço disponível para evitar sobreposição
+    y_range = df["y"].max() - df["y"].min()
+    min_spacing = y_range * 0.08  # 8% do range como distância mínima
+    
+    # Determina melhor posição para Máx (tenta acima, senão abaixo)
+    max_textpos = "top right"
+    if (y_last - y_max) < min_spacing:
+        max_textpos = "bottom right"
+    
+    # Determina melhor posição para Mín (tenta abaixo, senão acima)
+    min_textpos = "bottom right"
+    if (y_min - y_last) < min_spacing:
+        min_textpos = "top right"
+    
+    # Linha de Máx
+    fig.add_hline(y=y_max, line_dash="dot", line_width=1.5, line_color="rgba(200,100,100,0.6)",
                   row=1, col=1)
     fig.add_trace(go.Scatter(x=[x_max], y=[y_max], mode="markers+text",
-                             text=[f"{y_max:.2f}"], textposition="top center",
-                             name="Máx", showlegend=False), row=1, col=1)
+                             text=[f"Máx: {y_max:.2f}"], textposition=max_textpos,
+                             marker=dict(size=6, color="rgba(200,100,100,0.8)"),
+                             name="Máx", showlegend=False,
+                             textfont=dict(size=11, color="rgba(200,100,100,1)")), row=1, col=1)
+    
+    # Linha de Mín
+    fig.add_hline(y=y_min, line_dash="dot", line_width=1.5, line_color="rgba(100,200,100,0.6)",
+                  row=1, col=1)
     fig.add_trace(go.Scatter(x=[x_min], y=[y_min], mode="markers+text",
-                             text=[f"{y_min:.2f}"], textposition="bottom center",
-                             name="Mín", showlegend=False), row=1, col=1)
+                             text=[f"Mín: {y_min:.2f}"], textposition=min_textpos,
+                             marker=dict(size=6, color="rgba(100,200,100,0.8)"),
+                             name="Mín", showlegend=False,
+                             textfont=dict(size=11, color="rgba(100,200,100,1)")), row=1, col=1)
+    
+    # Último valor
     fig.add_trace(go.Scatter(x=[x_last], y=[y_last], mode="markers+text",
-                             text=[f"{y_last:.2f}"], textposition="top center",
-                             name="Último", showlegend=False), row=1, col=1)
+                             text=[f"Último: {y_last:.2f}"], textposition="top center",
+                             marker=dict(size=6, color="rgba(122,162,247,0.8)"),
+                             name="Último", showlegend=False,
+                             textfont=dict(size=11, color="rgba(122,162,247,1)")), row=1, col=1)
 
     # (2) Subplot: STD ou RSI
     if subplot.lower() == "std":

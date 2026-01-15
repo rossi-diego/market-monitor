@@ -7,6 +7,7 @@ import streamlit as st
 from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel, oil_share
 from src.visualization import plot_ratio_std_plotly
 from src.utils import apply_theme, date_range_picker, rsi, section
+from src.email_utils import send_email_with_chart_attachments, EmailConfig
 
 # --- Theme
 apply_theme()
@@ -97,3 +98,56 @@ else:
         margin=dict(t=80),
     )
     st.plotly_chart(fig, use_container_width=True)
+
+    # ============================================================
+    # Email sending section
+    # ============================================================
+    st.divider()
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown("### 📧 Enviar relatório por email")
+        st.caption("Envia o gráfico atual por email para os destinatários configurados")
+
+    with col2:
+        if st.button("📨 Enviar Email", type="primary", use_container_width=True):
+            with st.spinner("Enviando email..."):
+                try:
+                    # Create email config
+                    email_config = EmailConfig(
+                        recipients=[
+                            "diego.santanna@oleoplan.com.br",
+                            "otavio.kucharski@oleoplan.com.br"
+                        ],
+                        subject=f"Market Monitor - {ratio_label}",
+                        body_text=(
+                            f"Segue abaixo o gráfico da relação {ratio_label} "
+                            f"no período de {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}.\n\n"
+                            "Os dados consideram o último settlement price com conversão "
+                            "das unidades dos ativos para toneladas, utilizando o continuation future 1."
+                        ),
+                        footer_text="Este email foi gerado automaticamente pelo Market Monitor Panel.",
+                        show_timestamp=True,
+                    )
+
+                    # Send email with current chart
+                    charts = {ratio_label: fig}
+                    success = send_email_with_chart_attachments(
+                        charts=charts,
+                        config=email_config,
+                    )
+
+                    if success:
+                        st.success("✅ Email enviado com sucesso!")
+                    else:
+                        st.error("❌ Falha ao enviar email. Verifique os logs no console.")
+
+                except Exception as e:
+                    st.error(f"❌ Erro ao enviar email: {str(e)}")
+
+    # Optional: Add recipient configuration in expander
+    with st.expander("⚙️ Configurar destinatários"):
+        st.info(
+            "Para alterar os destinatários padrão do email, edite o arquivo:\n\n"
+            "`src/email_utils.py` (classe `EmailConfig`, linha 24-27)"
+        )
