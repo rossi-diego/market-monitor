@@ -441,13 +441,20 @@ def display_comparison_stats(data, col1, col2, label1, label2):
 
 def export_data_to_csv(data, filename="data.csv"):
     """Create CSV download button."""
-    csv = data.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Baixar dados (CSV)",
-        data=csv,
-        file_name=filename,
-        mime="text/csv",
-    )
+    if data.empty:
+        st.warning("Sem dados para exportar")
+        return
+
+    try:
+        csv = data.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Baixar dados (CSV)",
+            data=csv,
+            file_name=filename,
+            mime="text/csv",
+        )
+    except Exception as e:
+        st.error(f"Erro ao exportar CSV: {str(e)}")
 
 
 def plot_single_asset(data, asset_col, asset_label, ma_window):
@@ -720,6 +727,35 @@ def main():
         # Plot chart
         fig = plot_single_asset(df_view, close_col, asset_label, ma_window)
 
+        # Explanatory notes
+        with st.expander("ℹ️ Como interpretar o gráfico", expanded=False):
+            st.markdown("""
+            ### 📊 Componentes do Gráfico
+
+            **Painel Superior - Preço:**
+            - **Linha Azul**: Preço de fechamento do ativo ao longo do tempo
+            - **Linha Laranja**: Média móvel (MA) - suaviza flutuações e mostra a tendência
+              - Preço acima da MA = tendência de alta
+              - Preço abaixo da MA = tendência de baixa
+              - Cruzamentos podem indicar mudança de tendência
+
+            **Painel Inferior - RSI (Relative Strength Index):**
+            - **Escala**: 0 a 100
+            - **Interpretação**:
+              - RSI > 70: Ativo pode estar **sobrecomprado** (caro) - possível correção
+              - RSI < 30: Ativo pode estar **sobrevendido** (barato) - possível recuperação
+              - RSI entre 30-70: Zona neutra
+            - **Linha Roxa**: RSI atual
+            - **Linhas Pontilhadas**: Zonas de 30 (suporte) e 70 (resistência)
+
+            ### 🎯 Dicas de Trading
+
+            - **Sinal de Compra**: RSI < 30 + preço tocando ou abaixo da MA
+            - **Sinal de Venda**: RSI > 70 + preço muito acima da MA
+            - **Divergências**: RSI sobe enquanto preço cai (ou vice-versa) = possível reversão
+            - Combine com as métricas acima (Z-Score, Sharpe, etc.) para decisões mais informadas
+            """)
+
         # Export options
         st.markdown("### 📥 Exportar dados")
         col_exp1, col_exp2 = st.columns(2)
@@ -799,6 +835,49 @@ def main():
             second_label,
             normalize
         )
+
+        # Explanatory notes for comparison
+        with st.expander("ℹ️ Como interpretar a comparação", expanded=False):
+            st.markdown(f"""
+            ### 📊 Gráfico de Comparação
+
+            **Modo de Visualização:**
+            - {'**Normalizado (Base 100)**: Ambos os ativos começam em 100, facilitando comparação de performance relativa' if normalize else '**Escalas Separadas**: Cada ativo usa sua própria escala (eixo Y esquerdo e direito)'}
+            - Compare a movimentação e tendências dos ativos ao longo do tempo
+
+            ### 📈 Métricas Apresentadas
+
+            **Correlações:**
+            - **Pearson**: Mede relação LINEAR entre os ativos
+              - +1: Movem-se perfeitamente juntos
+              - -1: Movem-se perfeitamente opostos
+              - 0: Sem relação linear
+            - **Spearman**: Mede relação MONOTÔNICA (mesma direção, mas não necessariamente proporcional)
+              - Mais robusta a outliers que Pearson
+              - Use quando a relação não é perfeitamente linear
+
+            **Beta ({asset_label} vs {second_label}):**
+            - Mede quanto {asset_label} tende a variar quando {second_label} varia
+            - Beta = 1.0: Movem-se na mesma proporção
+            - Beta > 1.0: {asset_label} é mais volátil que {second_label}
+            - Beta < 1.0: {asset_label} é menos volátil que {second_label}
+            - Beta negativo: Movem-se em direções opostas
+
+            ### 🎯 Estratégias com Comparação
+
+            **Arbitragem:**
+            - Se correlação é alta mas os ativos divergem temporariamente, pode haver oportunidade
+            - Z-Score alto em um e baixo no outro = possível convergência futura
+
+            **Hedge:**
+            - Beta negativo indica potencial de hedge (proteção)
+            - Exemplo: se beta = -0.8, quando um cai 10%, o outro tende a subir 8%
+
+            **Pair Trading:**
+            - Procure ativos com correlação forte (>0.7)
+            - Quando um está "Caro" (Z > 1.5) e outro "Barato" (Z < -1.5)
+            - Venda o caro, compre o barato, esperando convergência
+            """)
 
         # Export options
         st.markdown("### 📥 Exportar dados")
