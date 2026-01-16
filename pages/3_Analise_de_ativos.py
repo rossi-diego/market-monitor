@@ -770,15 +770,18 @@ def main():
 
         with col_exp2:
             if fig:
-                # Create a buffer for the image
-                img_bytes = fig.to_image(format="png", width=1200, height=600)
-                st.download_button(
-                    label="📥 Baixar gráfico (PNG)",
-                    data=img_bytes,
-                    file_name=f"{asset_label.replace('/', '_')}_chart.png",
-                    mime="image/png",
-                    key="download_png_single",
-                )
+                try:
+                    # Create a buffer for the image
+                    img_bytes = fig.to_image(format="png", width=1200, height=600)
+                    st.download_button(
+                        label="📥 Baixar gráfico (PNG)",
+                        data=img_bytes,
+                        file_name=f"{asset_label.replace('/', '_')}_chart.png",
+                        mime="image/png",
+                        key="download_png_single",
+                    )
+                except Exception:
+                    st.warning("⚠️ Export de PNG não disponível neste ambiente. Use screenshot do navegador.")
 
     # ============================================================
     # Two-Asset Comparison Mode
@@ -895,14 +898,17 @@ def main():
 
         with col_exp2:
             if fig:
-                img_bytes = fig.to_image(format="png", width=1200, height=600)
-                st.download_button(
-                    label="📥 Baixar gráfico (PNG)",
-                    data=img_bytes,
-                    file_name=f"comparison_{asset_label}_{second_label}.png".replace("/", "_"),
-                    mime="image/png",
-                    key="download_png_comparison",
-                )
+                try:
+                    img_bytes = fig.to_image(format="png", width=1200, height=600)
+                    st.download_button(
+                        label="📥 Baixar gráfico (PNG)",
+                        data=img_bytes,
+                        file_name=f"comparison_{asset_label}_{second_label}.png".replace("/", "_"),
+                        mime="image/png",
+                        key="download_png_comparison",
+                    )
+                except Exception:
+                    st.warning("⚠️ Export de PNG não disponível neste ambiente. Use screenshot do navegador.")
 
 
 # Run main function
