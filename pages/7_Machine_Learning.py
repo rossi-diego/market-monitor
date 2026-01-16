@@ -844,7 +844,7 @@ try:
 
     # Add vertical line separating history from forecast
     fig_combined.add_vline(
-        x=last_date,
+        x=last_date.isoformat(),  # Convert Timestamp to ISO string
         line_dash="dot",
         line_color="gray",
         annotation_text="Início da Previsão",
