@@ -1,16 +1,20 @@
 """
-Asset Analysis Page
+Asset Analysis Page - Professional Edition
 
 Features:
 - Select one asset to analyze (Price + RSI chart)
 - OR compare two assets side-by-side
-- Configure date ranges, moving averages, and normalization options
+- Summary statistics and key metrics
+- Professional visual layout with containers
+- Export functionality (CSV and PNG)
+- Data quality indicators
 """
 
 # ============================================================
 # Imports & Config
 # ============================================================
 import pandas as pd
+import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 
@@ -70,11 +74,167 @@ def get_asset_label(column_name, assets_map):
     )
 
 
+def calculate_statistics(data, column):
+    """Calculate key statistics for the data."""
+    if data.empty or column not in data.columns:
+        return None
+
+    series = data[column].dropna()
+    if series.empty:
+        return None
+
+    current_price = series.iloc[-1]
+    first_price = series.iloc[0]
+
+    # Calculate returns
+    returns = series.pct_change().dropna()
+
+    stats = {
+        "current": current_price,
+        "period_change": ((current_price - first_price) / first_price * 100),
+        "min": series.min(),
+        "max": series.max(),
+        "mean": series.mean(),
+        "volatility": returns.std() * np.sqrt(252) * 100,  # Annualized
+        "last_update": data["date"].max(),
+        "data_points": len(series),
+    }
+
+    return stats
+
+
+def display_metric_card(label, value, delta=None, help_text=None):
+    """Display a professional metric card."""
+    col = st.container()
+    with col:
+        if delta is not None:
+            st.metric(
+                label=label,
+                value=value,
+                delta=delta,
+                help=help_text
+            )
+        else:
+            st.metric(
+                label=label,
+                value=value,
+                help=help_text
+            )
+
+
+def display_statistics_panel(data, column, label):
+    """Display statistics panel with key metrics."""
+    stats = calculate_statistics(data, column)
+
+    if not stats:
+        st.warning("Dados insuficientes para calcular estatísticas.")
+        return
+
+    st.markdown(f"### 📊 Estatísticas - {label}")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        display_metric_card(
+            "Preço Atual",
+            f"{stats['current']:.2f}",
+            f"{stats['period_change']:+.2f}%",
+            "Preço mais recente no período"
+        )
+
+    with col2:
+        display_metric_card(
+            "Volatilidade (anual)",
+            f"{stats['volatility']:.1f}%",
+            help_text="Volatilidade anualizada dos retornos"
+        )
+
+    with col3:
+        display_metric_card(
+            "Mínimo",
+            f"{stats['min']:.2f}",
+            help_text="Menor preço no período"
+        )
+
+    with col4:
+        display_metric_card(
+            "Máximo",
+            f"{stats['max']:.2f}",
+            help_text="Maior preço no período"
+        )
+
+    # Data quality indicator
+    st.caption(f"📅 Última atualização: {stats['last_update'].strftime('%d/%m/%Y')} | "
+               f"📈 {stats['data_points']} pontos de dados")
+
+
+def calculate_correlation(data, col1, col2):
+    """Calculate correlation between two series."""
+    if data.empty or col1 not in data.columns or col2 not in data.columns:
+        return None
+
+    return data[[col1, col2]].corr().iloc[0, 1]
+
+
+def display_comparison_stats(data, col1, col2, label1, label2):
+    """Display comparison statistics between two assets."""
+    stats1 = calculate_statistics(data, col1)
+    stats2 = calculate_statistics(data, col2)
+    corr = calculate_correlation(data, col1, col2)
+
+    if not stats1 or not stats2:
+        return
+
+    st.markdown("### 📊 Estatísticas Comparativas")
+
+    col_a, col_b, col_c = st.columns(3)
+
+    with col_a:
+        st.markdown(f"**{label1}**")
+        st.metric("Variação no período", f"{stats1['period_change']:+.2f}%")
+        st.metric("Volatilidade", f"{stats1['volatility']:.1f}%")
+
+    with col_b:
+        st.markdown(f"**{label2}**")
+        st.metric("Variação no período", f"{stats2['period_change']:+.2f}%")
+        st.metric("Volatilidade", f"{stats2['volatility']:.1f}%")
+
+    with col_c:
+        st.markdown("**Correlação**")
+        if corr is not None:
+            corr_pct = corr * 100
+            st.metric(
+                "Coeficiente",
+                f"{corr:.3f}",
+                f"{corr_pct:+.1f}%",
+                help="Correlação de Pearson entre os ativos"
+            )
+
+            # Interpretation
+            if abs(corr) > 0.7:
+                st.success("Correlação forte")
+            elif abs(corr) > 0.3:
+                st.info("Correlação moderada")
+            else:
+                st.warning("Correlação fraca")
+
+
+def export_data_to_csv(data, filename="data.csv"):
+    """Create CSV download button."""
+    csv = data.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Baixar dados (CSV)",
+        data=csv,
+        file_name=filename,
+        mime="text/csv",
+    )
+
+
 def plot_single_asset(data, asset_col, asset_label, ma_window):
     """Create price + RSI chart for single asset."""
     if data.empty:
         st.info("Sem dados no período selecionado.")
-        return
+        return None
 
     fig = plot_price_rsi_plotly(
         data,
@@ -100,20 +260,20 @@ def plot_single_asset(data, asset_col, asset_label, ma_window):
             pad=dict(b=12),
         ),
         margin=dict(t=80),
+        height=600,
     )
 
     st.plotly_chart(fig, use_container_width=True)
+    return fig
 
 
 def prepare_comparison_data(base, cols, mask, merge_mode):
     """Prepare data for two-asset comparison with gap handling."""
     if merge_mode == "Datas em comum (sem preenchimento)":
-        # Only use dates where both assets have prices
         return base.loc[mask, cols].dropna(subset=cols).copy()
 
     # Fill small gaps with forward fill (limited)
     GAP_LIMIT = 3
-
     tmp = base.loc[mask, cols].dropna(subset=["date"]).copy().sort_values("date")
 
     if tmp.empty:
@@ -131,12 +291,12 @@ def prepare_comparison_data(base, cols, mask, merge_mode):
         .rename(columns={"index": "date"})
     )
 
-    # Ensure both columns have values after filling
     return tmp.dropna(subset=[c for c in cols if c != "date"])
 
 
 def normalize_comparison_data(data, col1, col2):
     """Normalize both columns to start at 100."""
+    data = data.copy()
     for col in [col1, col2]:
         series = data[col].dropna()
         if not series.empty:
@@ -158,6 +318,7 @@ def plot_comparison_chart(data, col1, col2, label1, label2, normalized):
             mode="lines",
             name=label1,
             yaxis="y1",
+            line=dict(width=2),
         )
     )
 
@@ -168,6 +329,7 @@ def plot_comparison_chart(data, col1, col2, label1, label2, normalized):
             mode="lines",
             name=label2,
             yaxis="y1" if normalized else "y2",
+            line=dict(width=2),
         )
     )
 
@@ -198,6 +360,8 @@ def plot_comparison_chart(data, col1, col2, label1, label2, normalized):
             x=0.0,
         ),
         margin=dict(t=80),
+        height=600,
+        hovermode='x unified',
     )
 
     # Add second y-axis if not normalized
@@ -211,6 +375,7 @@ def plot_comparison_chart(data, col1, col2, label1, label2, normalized):
 
     fig.update_layout(**layout)
     st.plotly_chart(fig, use_container_width=True)
+    return fig
 
 
 # ============================================================
@@ -218,162 +383,195 @@ def plot_comparison_chart(data, col1, col2, label1, label2, normalized):
 # ============================================================
 def main():
     """Main page logic."""
+    # Page header
+    st.markdown("# 📈 Análise de Ativos")
+    st.markdown("Análise técnica e comparativa de commodities e ativos financeiros")
+    st.divider()
+
     # Prepare data
     BASE = prepare_base_data(df)
 
     # ============================================================
-    # Asset Selection
+    # Asset Selection (in container)
     # ============================================================
-    section(
-        "Selecione o ativo",
-        "Favoritos abaixo, caso queira outro ativo, selecione no dropdown",
-        "🧭",
-    )
-
-    close_col, _assets = asset_picker_dropdown(
-        BASE,
-        ASSETS_MAP,
-        state_key="close_col",
-    )
-
-    asset_label = get_asset_label(close_col, ASSETS_MAP)
-    st.divider()
-
-    # ============================================================
-    # Optional: Two-Asset Comparison
-    # ============================================================
-    section(
-        "Comparação",
-        "Opcional: selecione um segundo ativo para comparar no mesmo gráfico.",
-        "📊",
-    )
-
-    compare_two = st.checkbox(
-        "Comparar com segundo ativo",
-        value=False,
-        key="compare_two_assets",
-    )
-
-    second_col = None
-    second_label = None
-
-    if compare_two:
-        # Build list excluding first asset
-        asset_labels = list(ASSETS_MAP.keys())
-        available_for_comparison = [
-            lbl for lbl in asset_labels if ASSETS_MAP[lbl] != close_col
-        ]
-
-        second_label = st.selectbox(
-            "Segundo ativo",
-            options=available_for_comparison,
-            key="second_asset_select",
+    with st.container(border=True):
+        section(
+            "Selecione o ativo principal",
+            "Escolha o ativo que deseja analisar",
+            "🎯",
         )
-        second_col = ASSETS_MAP[second_label]
 
-    st.divider()
-
-    # ============================================================
-    # Date Range Selection
-    # ============================================================
-    section("Selecione o período do gráfico", "Use presets ou ajuste no slider", "🗓️")
-    start_date, end_date = date_range_picker(
-        BASE["date"],
-        state_key="range",
-        default_days=365,
-    )
-
-    # ============================================================
-    # Chart Parameters
-    # ============================================================
-    section("Parâmetros", None, "⚙️")
-
-    if not compare_two:
-        ma_window = ma_picker(
-            options=(20, 50, 200),
-            default=90,
-            state_key="ma_window",
+        close_col, _assets = asset_picker_dropdown(
+            BASE,
+            ASSETS_MAP,
+            state_key="close_col",
         )
-        st.caption(f"Média móvel selecionada: **{ma_window}** períodos")
-    else:
-        st.caption("Média móvel e RSI desativados no modo de comparação.")
+
+        asset_label = get_asset_label(close_col, ASSETS_MAP)
 
     st.divider()
 
     # ============================================================
-    # Filter Data and Plot
+    # Comparison Mode Toggle
+    # ============================================================
+    with st.container(border=True):
+        section(
+            "Modo de comparação",
+            "Compare dois ativos no mesmo gráfico",
+            "📊",
+        )
+
+        compare_two = st.checkbox(
+            "Ativar comparação entre dois ativos",
+            value=False,
+            key="compare_two_assets",
+        )
+
+        second_col = None
+        second_label = None
+
+        if compare_two:
+            asset_labels = list(ASSETS_MAP.keys())
+            available_for_comparison = [
+                lbl for lbl in asset_labels if ASSETS_MAP[lbl] != close_col
+            ]
+
+            second_label = st.selectbox(
+                "Segundo ativo para comparação",
+                options=available_for_comparison,
+                key="second_asset_select",
+            )
+            second_col = ASSETS_MAP[second_label]
+
+    st.divider()
+
+    # ============================================================
+    # Date Range and Parameters
+    # ============================================================
+    with st.container(border=True):
+        section("Configurações do gráfico", "Ajuste período e parâmetros", "⚙️")
+
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            start_date, end_date = date_range_picker(
+                BASE["date"],
+                state_key="range",
+                default_days=365,
+            )
+
+        with col2:
+            if not compare_two:
+                ma_window = ma_picker(
+                    options=(20, 50, 90, 200),
+                    default=90,
+                    state_key="ma_window",
+                )
+                st.caption(f"Média móvel: **{ma_window}** períodos")
+            else:
+                st.info("MA e RSI desativados em modo de comparação")
+
+    st.divider()
+
+    # ============================================================
+    # Validate and Filter Data
     # ============================================================
     if close_col not in BASE.columns:
-        st.warning(f"A coluna selecionada ('{close_col}') não está disponível.")
+        st.error(f"❌ A coluna '{close_col}' não está disponível nos dados.")
         return
 
     # Filter by date range
     mask = BASE["date"].dt.date.between(start_date, end_date)
 
-    # -------------------------
+    # ============================================================
     # Single-Asset Mode
-    # -------------------------
+    # ============================================================
     if not compare_two:
         df_view = BASE.loc[mask, ["date", close_col]].dropna().copy()
-        plot_single_asset(df_view, close_col, asset_label, ma_window)
 
-    # -------------------------
-    # Two-Asset Comparison Mode
-    # -------------------------
-    else:
-        if not second_col:
-            st.info("Selecione um segundo ativo para comparação.")
+        if df_view.empty:
+            st.warning("⚠️ Sem dados no período selecionado.")
             return
 
-        if second_col not in BASE.columns:
-            st.warning(f"A coluna '{second_col}' não está disponível.")
+        # Display statistics
+        display_statistics_panel(df_view, close_col, asset_label)
+        st.divider()
+
+        # Plot chart
+        fig = plot_single_asset(df_view, close_col, asset_label, ma_window)
+
+        # Export options
+        st.markdown("### 📥 Exportar dados")
+        col_exp1, col_exp2 = st.columns(2)
+
+        with col_exp1:
+            export_data_to_csv(
+                df_view,
+                f"{asset_label.replace('/', '_')}_{start_date}_{end_date}.csv"
+            )
+
+        with col_exp2:
+            if fig:
+                # Create a buffer for the image
+                img_bytes = fig.to_image(format="png", width=1200, height=600)
+                st.download_button(
+                    label="📥 Baixar gráfico (PNG)",
+                    data=img_bytes,
+                    file_name=f"{asset_label.replace('/', '_')}_chart.png",
+                    mime="image/png",
+                )
+
+    # ============================================================
+    # Two-Asset Comparison Mode
+    # ============================================================
+    else:
+        if not second_col or second_col not in BASE.columns:
+            st.error("❌ Selecione um segundo ativo válido para comparação.")
             return
 
         cols = ["date", close_col, second_col]
 
-        # Gap handling options
-        st.markdown("**Tratamento de dados faltantes**")
-        merge_mode = st.radio(
-            "",
-            options=(
-                "Datas em comum (sem preenchimento)",
-                "Preencher pequenos gaps com último valor (ffill)",
-            ),
-            key="merge_mode",
-        )
-        st.caption(
-            "• *Datas em comum*: usa apenas dias em que os dois ativos têm preço.\n"
-            "• *ffill*: preenche gaps de até 3 dias com o último valor."
-        )
+        # Gap handling options (in expander)
+        with st.expander("⚙️ Opções avançadas de tratamento de dados"):
+            merge_mode = st.radio(
+                "Tratamento de dados faltantes",
+                options=(
+                    "Datas em comum (sem preenchimento)",
+                    "Preencher pequenos gaps com último valor (ffill)",
+                ),
+                key="merge_mode",
+            )
+            st.caption(
+                "• *Datas em comum*: usa apenas dias com dados em ambos.\n"
+                "• *ffill*: preenche gaps de até 3 dias úteis."
+            )
 
         # Prepare data
         df_view = prepare_comparison_data(BASE, cols, mask, merge_mode)
 
         if df_view.empty:
-            st.info("Sem dados no período selecionado.")
+            st.warning("⚠️ Sem dados no período selecionado.")
             return
 
-        st.markdown("---")
-
         # Normalization option
-        st.markdown("**Normalização (opcional)**")
-        normalize = st.checkbox(
-            "Normalizar ambos os ativos (início do período = 100)",
-            value=False,
-            key="normalize_compare",
-        )
-        st.caption(
-            "A normalização reescala cada série para começar em **100**, "
-            "facilitando a comparação de variação percentual."
-        )
-        st.markdown("<br>", unsafe_allow_html=True)
+        with st.container(border=True):
+            normalize = st.checkbox(
+                "🔄 Normalizar ambos os ativos (base 100)",
+                value=False,
+                key="normalize_compare",
+                help="Reescala ambas as séries para começarem em 100"
+            )
 
         # Apply normalization if requested
         if normalize:
             df_view = normalize_comparison_data(df_view, close_col, second_col)
 
+        # Display comparison statistics
+        display_comparison_stats(df_view, close_col, second_col, asset_label, second_label)
+        st.divider()
+
         # Plot comparison
-        plot_comparison_chart(
+        fig = plot_comparison_chart(
             df_view,
             close_col,
             second_col,
@@ -381,6 +579,26 @@ def main():
             second_label,
             normalize
         )
+
+        # Export options
+        st.markdown("### 📥 Exportar dados")
+        col_exp1, col_exp2 = st.columns(2)
+
+        with col_exp1:
+            export_data_to_csv(
+                df_view,
+                f"comparison_{asset_label}_{second_label}_{start_date}_{end_date}.csv".replace("/", "_")
+            )
+
+        with col_exp2:
+            if fig:
+                img_bytes = fig.to_image(format="png", width=1200, height=600)
+                st.download_button(
+                    label="📥 Baixar gráfico (PNG)",
+                    data=img_bytes,
+                    file_name=f"comparison_{asset_label}_{second_label}.png".replace("/", "_"),
+                    mime="image/png",
+                )
 
 
 # Run main function
