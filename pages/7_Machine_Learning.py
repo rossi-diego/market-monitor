@@ -25,10 +25,13 @@ The page also includes explanations for:
 import pandas as pd
 import numpy as np
 import streamlit as st
+from scipy import stats
 
-from sklearn.linear_model import Ridge
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.linear_model import Ridge, Lasso, ElasticNet
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.svm import SVR
+from sklearn.neural_network import MLPRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, mean_absolute_percentage_error
 from sklearn.preprocessing import StandardScaler
 
 try:
@@ -36,6 +39,12 @@ try:
     HAS_XGB = True
 except ImportError:
     HAS_XGB = False
+
+try:
+    from lightgbm import LGBMRegressor
+    HAS_LGBM = True
+except ImportError:
+    HAS_LGBM = False
 
 from src.data_pipeline import df
 from src.utils import apply_theme, date_range_picker, section
@@ -143,8 +152,13 @@ with st.container(border=True):
 
     with col_model:
         models_dict = {
-            "Ridge Regression": Ridge(),
-            "Random Forest": RandomForestRegressor(n_estimators=500, random_state=42),
+            "Ridge Regression": Ridge(alpha=1.0),
+            "Lasso Regression": Lasso(alpha=0.01),
+            "Elastic Net": ElasticNet(alpha=0.01, l1_ratio=0.5),
+            "Random Forest": RandomForestRegressor(n_estimators=500, max_depth=15, random_state=42, n_jobs=-1),
+            "Gradient Boosting": GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=5, random_state=42),
+            "SVR (Support Vector)": SVR(kernel='rbf', C=100, epsilon=0.1),
+            "Neural Network (MLP)": MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=1000, learning_rate_init=0.001, random_state=42),
         }
         if HAS_XGB:
             models_dict["XGBoost"] = XGBRegressor(
@@ -155,19 +169,34 @@ with st.container(border=True):
                 colsample_bytree=0.9,
                 random_state=42,
             )
+        if HAS_LGBM:
+            models_dict["LightGBM"] = LGBMRegressor(
+                n_estimators=600,
+                learning_rate=0.05,
+                max_depth=6,
+                num_leaves=31,
+                random_state=42,
+                verbose=-1,
+            )
 
         model_label = st.selectbox(
             "Algoritmo",
             list(models_dict.keys()),
-            help="Ridge: linear rápido | RF: não-linear robusto | XGB: máxima performance"
+            help="Ridge: linear rápido | Lasso: com regularização L1 | RF: não-linear robusto | XGB/LGBM: máxima performance | SVR: kernel baseado | MLP: redes neurais"
         )
         model = models_dict[model_label]
 
         # Model description
         model_descriptions = {
-            "Ridge Regression": "✅ Rápido e interpretável\n✅ Bom para relações lineares\n⚠️ Pode não capturar não-linearidades",
-            "Random Forest": "✅ Robusto a outliers\n✅ Captura não-linearidades\n✅ Menos propenso a overfitting",
-            "XGBoost": "✅ Melhor performance geral\n✅ Captura padrões complexos\n⚠️ Requer mais dados para treinar"
+            "Ridge Regression": "✅ Rápido e interpretável\n✅ Bom para relações lineares\n✅ Robusto com multicolinearidade\n⚠️ Pode não capturar não-linearidades",
+            "Lasso Regression": "✅ Seleção automática de features\n✅ Simples e interpretável\n⚠️ Menos eficaz com muitas features\n⚠️ Sensível a escala",
+            "Elastic Net": "✅ Combina Ridge + Lasso\n✅ Bom com muitas features correlacionadas\n✅ Seleção de features\n⚠️ Menos preciso que ensemble methods",
+            "Random Forest": "✅ Robusto a outliers\n✅ Captura não-linearidades\n✅ Menos propenso a overfitting\n✅ Paralelizável",
+            "Gradient Boosting": "✅ Melhor que RF em muitos casos\n✅ Captura padrões complexos\n⚠️ Risco de overfitting\n⚠️ Mais lento para treinar",
+            "SVR (Support Vector)": "✅ Bom com high-dimensional data\n✅ Kernel flex para não-linearidades\n⚠️ Requer normalização\n⚠️ Lento com muitos dados",
+            "Neural Network (MLP)": "✅ Máxima flexibilidade\n✅ Padrões muito complexos\n⚠️ Caixa preta (difícil interpretar)\n⚠️ Requer mais dados",
+            "XGBoost": "✅ Melhor performance geral\n✅ Captura padrões muito complexos\n✅ Feature importance confiável\n⚠️ Requer mais dados para treinar",
+            "LightGBM": "✅ Mais rápido que XGBoost\n✅ Menor consumo de memória\n✅ Excelente performance\n⚠️ Pode overfittar com poucos dados",
         }
         st.caption(model_descriptions.get(model_label, ""))
 
@@ -314,23 +343,41 @@ with st.container(border=True):
     rmse = np.sqrt(mean_squared_error(y_test_true, pred_test))
     r2 = r2_score(y_test_true, pred_test)
 
-    # MAPE calculation (avoiding division by zero)
-    mape = np.mean(np.abs((y_test_true - pred_test) / y_test_true)) * 100 if (y_test_true != 0).all() else None
+    # MAPE calculation (handling division by zero properly)
+    def safe_mape(y_true, y_pred):
+        """Calculate MAPE with proper handling of edge cases."""
+        if len(y_true) == 0:
+            return None
+        
+        # Avoid division by zero
+        mask = y_true != 0
+        if mask.sum() == 0:
+            return None
+        
+        mape_val = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
+        return mape_val
+
+    mape = safe_mape(y_test_true.values, pred_test)
+
+    # Additional metrics: MASE (Mean Absolute Scaled Error)
+    naive_forecast = y_test_true.iloc[:-1].values
+    naive_error = np.mean(np.abs(np.diff(y_test_true.values)))
+    mase = mae / (naive_error + 1e-8) if naive_error > 0 else np.inf
 
     # Mean of actual values for context
     y_mean = y_test_true.mean()
 
     # Display metrics in columns
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
 
     with col_m1:
         mae_pct = (mae / y_mean * 100) if y_mean != 0 else 0
         mae_color = "🟢" if mae_pct < 3 else "🟡" if mae_pct < 7 else "🔴"
         st.metric(
-            "MAE (Erro Médio Absoluto)",
+            "MAE",
             f"{mae:.2f}",
-            f"{mae_color} {mae_pct:.1f}% da média",
-            help="Erro médio em unidades do preço. Quanto menor, melhor."
+            f"{mae_color} {mae_pct:.1f}%",
+            help="Erro médio absoluto em unidades do preço"
         )
 
     with col_m2:
@@ -339,35 +386,43 @@ with st.container(border=True):
         st.metric(
             "RMSE",
             f"{rmse:.2f}",
-            f"{rmse_color} {rmse_pct:.1f}% da média",
-            help="Raiz do erro quadrático médio. Penaliza erros grandes."
+            f"{rmse_color} {rmse_pct:.1f}%",
+            help="Raiz do erro quadrático médio (penaliza grandes erros)"
         )
 
     with col_m3:
         r2_color = "🟢" if r2 > 0.7 else "🟡" if r2 > 0.3 else "🔴"
         r2_pct = r2 * 100 if r2 > 0 else 0
         st.metric(
-            "R² (Coef. Determinação)",
+            "R²",
             f"{r2:.3f}",
-            f"{r2_color} {r2_pct:.1f}% explicado",
-            help="% da variância explicada. 1.0 = perfeito, negativo = pior que média"
+            f"{r2_color} {r2_pct:.1f}%",
+            help="Coeficiente de determinação (% explicada)"
         )
 
     with col_m4:
-        if mape is not None:
+        if mape is not None and not np.isinf(mape):
             mape_color = "🟢" if mape < 5 else "🟡" if mape < 10 else "🔴"
             st.metric(
-                "MAPE (Erro %)",
+                "MAPE",
                 f"{mape:.1f}%",
                 f"{mape_color}",
-                help="Erro percentual médio absoluto. Mais interpretável."
+                help="Erro percentual médio absoluto"
             )
         else:
+            st.metric("MAPE", "N/A", help="Não calculável")
+
+    with col_m5:
+        if not np.isinf(mase):
+            mase_color = "🟢" if mase < 1.0 else "🟡" if mase < 1.5 else "🔴"
             st.metric(
-                "MAPE",
-                "N/A",
-                help="Não calculável (divisão por zero)"
+                "MASE",
+                f"{mase:.2f}",
+                f"{mase_color}",
+                help="Erro escalado pelo naive forecast (< 1.0 = melhor que naive)"
             )
+        else:
+            st.metric("MASE", "N/A", help="Erro escalado")
 
     # Interpretation guide
     with st.expander("📖 Como interpretar as métricas"):
@@ -383,10 +438,11 @@ with st.container(border=True):
         - Erro médio: {mae:.2f} unidades ({mae_pct:.1f}% da média)
         - {"✅ Excelente!" if mae_pct < 3 else "⚠️ Moderado" if mae_pct < 7 else "❌ Alto"}
         - Significa que, em média, o modelo erra {mae:.2f} unidades
+        - Mais interpretável que RMSE por usar escala original
 
         **RMSE (Root Mean Squared Error)**
         - RMSE: {rmse:.2f} ({rmse_pct:.1f}% da média)
-        - Penaliza outliers e erros grandes
+        - Penaliza outliers e erros grandes mais fortemente
         - {"✅ Bom desempenho" if rmse_pct < 5 else "⚠️ Aceitável" if rmse_pct < 10 else "❌ Revisar modelo"}
 
         **R² (Coefficient of Determination)**
@@ -395,9 +451,21 @@ with st.container(border=True):
         - {f"Explica {r2_pct:.0f}% da variabilidade dos dados" if r2 > 0 else "Não consegue melhorar a baseline"}
 
         **MAPE (Mean Absolute Percentage Error)**
-        - {f"MAPE: {mape:.1f}%" if mape is not None else "N/A"}
+        - {f"MAPE: {mape:.1f}%" if mape and not np.isinf(mape) else "N/A"}
         - {f"✅ Excelente precisão" if mape and mape < 5 else f"⚠️ Precisão moderada" if mape and mape < 10 else f"❌ Baixa precisão" if mape else "N/A"}
-        - {"Erro típico em % do valor real" if mape else ""}
+        - Erro em % do valor real (mais comparável entre diferentes escalas)
+
+        **MASE (Mean Absolute Scaled Error)**
+        - {f"MASE: {mase:.2f}" if not np.isinf(mase) else "N/A"}
+        - {"✅ Melhor que naive forecast" if mase < 1.0 else "⚠️ Similar ao naive" if mase < 1.5 else "❌ Pior que naive"}
+        - Compara performance com um modelo simples (naive forecast)
+        - MASE < 1.0 significa que o modelo é melhor que apenas repetir o último valor
+
+        ### 🧠 Qual métrica usar?
+        - **Para interpretação**: Use **MAE** ou **MAPE** (mesma unidade/proporção do preço)
+        - **Para otimização**: Minimize **RMSE** (mais sensível a outliers)
+        - **Para comparação**: Use **R²** ou **MASE** (independente da escala)
+        - **Combinado**: Bom modelo tem MAE baixo + R² alto + MASE < 1.0
         """)
 
 st.divider()
@@ -482,6 +550,128 @@ else:
 
 st.divider()
 
+# ============================================================
+# Residual Analysis (Diagnostic Charts)
+# ============================================================
+st.markdown("### 🔍 Análise de Resíduos (Diagnósticos do Modelo)")
+
+# Calculate residuals from test set
+residuals = y_test_true.values - pred_test
+
+# Create diagnostic plots
+fig_residuals = go.Figure()
+
+# Residuals over time
+fig_residuals.add_trace(
+    go.Scatter(
+        x=dates_test,
+        y=residuals,
+        mode="markers",
+        name="Resíduos",
+        marker=dict(
+            size=6,
+            color=residuals,
+            colorscale='RdBu',
+            showscale=True,
+            colorbar=dict(title="Erro")
+        ),
+        text=[f"Erro: {r:.2f}" for r in residuals],
+        hovertemplate="<b>%{text}</b><extra></extra>"
+    )
+)
+
+# Add zero line
+fig_residuals.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="Zero Error")
+
+fig_residuals.update_layout(
+    title="Resíduos ao Longo do Tempo",
+    xaxis_title="Data",
+    yaxis_title="Erro (Real - Previsto)",
+    height=400,
+    hovermode='x unified',
+)
+
+col_res_1, col_res_2 = st.columns([2, 1])
+
+with col_res_1:
+    st.plotly_chart(fig_residuals, use_container_width=True)
+
+with col_res_2:
+    st.markdown("**Estatísticas de Resíduos**")
+    st.metric("Média", f"{residuals.mean():.4f}", help="Deveria ser ~0 (modelo sem viés)")
+    st.metric("Std Dev", f"{residuals.std():.2f}", help="Variabilidade dos erros")
+    st.metric("Mínimo", f"{residuals.min():.2f}")
+    st.metric("Máximo", f"{residuals.max():.2f}")
+    st.metric("Maior erro (abs)", f"{np.abs(residuals).max():.2f}")
+
+# Distribution of residuals
+fig_dist = go.Figure()
+
+fig_dist.add_trace(
+    go.Histogram(
+        x=residuals,
+        nbinsx=30,
+        name="Distribuição de Erros",
+        marker=dict(color='lightblue', line=dict(color='darkblue'))
+    )
+)
+
+# Add normal distribution overlay
+mu, sigma = residuals.mean(), residuals.std()
+x = np.linspace(residuals.min(), residuals.max(), 100)
+fig_dist.add_trace(
+    go.Scatter(
+        x=x,
+        y=stats.norm.pdf(x, mu, sigma) * len(residuals) * (residuals.max() - residuals.min()) / 30,
+        mode='lines',
+        name='Distribuição Normal',
+        line=dict(color='red', width=2)
+    )
+)
+
+fig_dist.update_layout(
+    title="Distribuição dos Resíduos (Deveria ser Normal)",
+    xaxis_title="Erro",
+    yaxis_title="Frequência",
+    height=400,
+    showlegend=True
+)
+
+st.plotly_chart(fig_dist, use_container_width=True)
+
+# Q-Q Plot concept explanation
+with st.expander("📊 Entender os Diagnósticos de Resíduos"):
+    st.markdown("""
+    ### 🔍 O que significam os Resíduos?
+
+    **Resíduos = Valor Real - Previsão**
+    - Residual positivo: modelo subestimou (previu menos que a realidade)
+    - Residual negativo: modelo superestimou (previu mais que a realidade)
+    - Resíduos próximos de 0: bom ajuste
+
+    ### ✅ Sinais de um Bom Modelo:
+
+    1. **Resíduos centrados em zero**: Média dos resíduos ~0 (sem viés)
+    2. **Resíduos normalmente distribuídos**: Formam distribuição de sino
+    3. **Resíduos aleatórios**: Sem padrão ou tendência
+    4. **Variância constante (homocedasticidade)**: Erros similares em todo período
+
+    ### ⚠️ Sinais de Problema:
+
+    - **Média longe de zero**: Modelo tendencioso (sempre super/subestima)
+    - **Distribuição enviesada**: Modelo não captura certos padrões
+    - **Padrão nos resíduos**: Tendência, sazonalidade não capturada
+    - **Variância crescente**: Erros aumentam com o tempo ou com magnitude do target
+
+    ### 🎯 O que Fazer:
+
+    - Se há viés (média ≠ 0): Ajuste o modelo ou adicione features
+    - Se há padrão: Adicione mais lags ou features explicativas
+    - Se há outliers: Considere robustness ou remover/tratar outliers
+    - Se não-normal: Pode usar modelos que não assumem normalidade
+    """)
+
+st.divider()
 
 
 # ============================================================
@@ -559,139 +749,177 @@ st.divider()
 # ============================================================
 st.markdown(f"### 🔮 Previsão Futura ({horizon} dias)")
 
-# Usamos a última linha disponível (com lags já preenchidos) como ponto de partida
-last_row = df_ml.iloc[-1:].copy()
-last_date = df_ml["date"].iloc[-1]
-future_dates = pd.date_range(
-    start=last_date + pd.Timedelta(days=1),
-    periods=horizon,
-)
-
-forecast_values = []
-
-# Linha de features (sem date / target) em escala original
-current_row = last_row.drop(columns=["date", target_col]).copy()
-
-for _ in range(horizon):
-    # 1) Prepara features para previsão (aplica scaler se necessário)
-    if normalize and x_scaler is not None and y_scaler is not None:
-        current_x = x_scaler.transform(current_row)
-        next_pred_scaled = model.predict(current_x)[0]
-        # Volta para a escala original do target
-        next_pred = y_scaler.inverse_transform(
-            np.array([[next_pred_scaled]])
-        )[0, 0]
-    else:
-        next_pred = model.predict(current_row)[0]
-
-    forecast_values.append(next_pred)
-
-    # 2) Atualiza apenas os lags do target na linha atual (em escala ORIGINAL)
-    if num_lags > 0:
-        for i in range(num_lags, 1, -1):
-            current_row[f"{target_col}_lag{i}"] = current_row[
-                f"{target_col}_lag{i-1}"
-            ]
-        current_row[f"{target_col}_lag1"] = next_pred
-    # As outras features (externas) permanecem constantes com o último valor conhecido.
-
-# Calculate simple confidence interval (using historical std of residuals)
-forecast_std = residuals.std()
-upper_bound = [v + 1.96 * forecast_std * (1 + i*0.02) for i, v in enumerate(forecast_values)]
-lower_bound = [v - 1.96 * forecast_std * (1 + i*0.02) for i, v in enumerate(forecast_values)]
-
-# Combined chart: Historical (last 60 days) + Forecast
-last_60_days = min(60, len(df_ml))
-historical_dates = df_ml["date"].iloc[-last_60_days:]
-historical_values = df_ml[target_col].iloc[-last_60_days:]
-
-fig_combined = go.Figure()
-
-# Historical actual values
-fig_combined.add_trace(
-    go.Scatter(
-        x=historical_dates,
-        y=historical_values,
-        mode="lines",
-        name="Histórico Real",
-        line=dict(color="blue", width=2)
+try:
+    # Usamos a última linha disponível (com lags já preenchidos) como ponto de partida
+    last_row = df_ml.iloc[-1:].copy()
+    last_date = df_ml["date"].iloc[-1]
+    future_dates = pd.date_range(
+        start=last_date + pd.Timedelta(days=1),
+        periods=horizon,
     )
-)
 
-# Forecast
-fig_combined.add_trace(
-    go.Scatter(
-        x=future_dates,
-        y=forecast_values,
-        mode="lines+markers",
-        name="Previsão",
-        line=dict(color="red", width=2, dash="dash"),
-        marker=dict(size=5)
+    forecast_values = []
+
+    # Linha de features (sem date / target) em escala original
+    current_row = last_row.drop(columns=["date", target_col]).copy()
+
+    for step in range(horizon):
+        # 1) Prepara features para previsão (aplica scaler se necessário)
+        if normalize and x_scaler is not None and y_scaler is not None:
+            current_x = x_scaler.transform(current_row)
+            next_pred_scaled = model.predict(current_x)[0]
+            # Volta para a escala original do target
+            next_pred = y_scaler.inverse_transform(
+                np.array([[next_pred_scaled]])
+            )[0, 0]
+        else:
+            next_pred = model.predict(current_row)[0]
+
+        forecast_values.append(next_pred)
+
+        # 2) Atualiza apenas os lags do target na linha atual (em escala ORIGINAL)
+        if num_lags > 0:
+            for i in range(num_lags, 1, -1):
+                current_row[f"{target_col}_lag{i}"] = current_row[
+                    f"{target_col}_lag{i-1}"
+                ]
+            current_row[f"{target_col}_lag1"] = next_pred
+        # As outras features (externas) permanecem constantes com o último valor conhecido.
+
+    forecast_values = np.array(forecast_values)
+
+    # Calculate adaptive confidence interval (increases with forecast horizon)
+    forecast_std = residuals.std()
+    forecast_steps = np.arange(1, horizon + 1)
+    
+    # Uncertainty grows with horizon: std * (1 + 0.05 * step)
+    uncertainty_multiplier = 1.0 + (0.05 * forecast_steps)
+    upper_bound = forecast_values + 1.96 * forecast_std * uncertainty_multiplier
+    lower_bound = forecast_values - 1.96 * forecast_std * uncertainty_multiplier
+
+    # Combined chart: Historical (last 60 days) + Forecast
+    last_60_days = min(60, len(df_ml))
+    historical_dates = df_ml["date"].iloc[-last_60_days:]
+    historical_values = df_ml[target_col].iloc[-last_60_days:]
+
+    fig_combined = go.Figure()
+
+    # Historical actual values
+    fig_combined.add_trace(
+        go.Scatter(
+            x=historical_dates,
+            y=historical_values,
+            mode="lines",
+            name="Histórico Real",
+            line=dict(color="blue", width=2)
+        )
     )
-)
 
-# Confidence interval
-fig_combined.add_trace(
-    go.Scatter(
-        x=future_dates,
-        y=upper_bound,
-        mode="lines",
-        name="IC Superior (95%)",
-        line=dict(color="rgba(255,0,0,0)", width=0),
-        showlegend=False
+    # Forecast
+    fig_combined.add_trace(
+        go.Scatter(
+            x=future_dates,
+            y=forecast_values,
+            mode="lines+markers",
+            name="Previsão",
+            line=dict(color="red", width=2, dash="dash"),
+            marker=dict(size=5)
+        )
     )
-)
 
-fig_combined.add_trace(
-    go.Scatter(
-        x=future_dates,
-        y=lower_bound,
-        mode="lines",
-        name="IC Inferior (95%)",
-        line=dict(color="rgba(255,0,0,0)", width=0),
-        fill='tonexty',
-        fillcolor='rgba(255,0,0,0.2)',
-        showlegend=True
+    # Confidence interval
+    fig_combined.add_trace(
+        go.Scatter(
+            x=future_dates,
+            y=upper_bound,
+            mode="lines",
+            name="IC Superior (95%)",
+            line=dict(color="rgba(255,0,0,0)", width=0),
+            showlegend=False
+        )
     )
-)
 
-# Add vertical line separating history from forecast
-fig_combined.add_vline(
-    x=last_date,
-    line_dash="dot",
-    line_color="gray",
-    annotation_text="Início da Previsão",
-    annotation_position="top"
-)
+    fig_combined.add_trace(
+        go.Scatter(
+            x=future_dates,
+            y=lower_bound,
+            mode="lines",
+            name="IC Inferior (95%)",
+            line=dict(color="rgba(255,0,0,0)", width=0),
+            fill='tonexty',
+            fillcolor='rgba(255,0,0,0.2)',
+            showlegend=True
+        )
+    )
 
-fig_combined.update_layout(
-    title=f"Histórico (últimos {last_60_days} dias) + Previsão ({horizon} dias)",
-    xaxis_title="Data",
-    yaxis_title=target_col,
-    hovermode='x unified',
-    height=500,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-)
+    # Add vertical line separating history from forecast
+    fig_combined.add_vline(
+        x=last_date,
+        line_dash="dot",
+        line_color="gray",
+        annotation_text="Início da Previsão",
+        annotation_position="top"
+    )
 
-st.plotly_chart(fig_combined, use_container_width=True)
+    fig_combined.update_layout(
+        title=f"Histórico (últimos {last_60_days} dias) + Previsão ({horizon} dias)",
+        xaxis_title="Data",
+        yaxis_title=target_col,
+        hovermode='x unified',
+        height=500,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+    )
 
-# Forecast summary
-col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-with col_f1:
-    st.metric("Último Valor Real", f"{historical_values.iloc[-1]:.2f}", help=f"Último valor conhecido ({last_date.date()})")
-with col_f2:
-    first_forecast = forecast_values[0]
-    change_1d = ((first_forecast - historical_values.iloc[-1]) / historical_values.iloc[-1] * 100)
-    st.metric("Previsão +1 dia", f"{first_forecast:.2f}", f"{change_1d:+.1f}%")
-with col_f3:
-    last_forecast = forecast_values[-1]
-    change_horizon = ((last_forecast - historical_values.iloc[-1]) / historical_values.iloc[-1] * 100)
-    st.metric(f"Previsão +{horizon} dias", f"{last_forecast:.2f}", f"{change_horizon:+.1f}%")
-with col_f4:
-    avg_forecast = np.mean(forecast_values)
-    st.metric("Média Prevista", f"{avg_forecast:.2f}", help=f"Média das previsões para os próximos {horizon} dias")
+    st.plotly_chart(fig_combined, use_container_width=True)
 
-st.divider()
+    # Forecast summary
+    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+    with col_f1:
+        st.metric("Último Valor Real", f"{historical_values.iloc[-1]:.2f}", help=f"Último valor conhecido ({last_date.date()})")
+    with col_f2:
+        first_forecast = forecast_values[0]
+        change_1d = ((first_forecast - historical_values.iloc[-1]) / historical_values.iloc[-1] * 100)
+        st.metric("Previsão +1 dia", f"{first_forecast:.2f}", f"{change_1d:+.1f}%")
+    with col_f3:
+        last_forecast = forecast_values[-1]
+        change_horizon = ((last_forecast - historical_values.iloc[-1]) / historical_values.iloc[-1] * 100)
+        st.metric(f"Previsão +{horizon} dias", f"{last_forecast:.2f}", f"{change_horizon:+.1f}%")
+    with col_f4:
+        avg_forecast = np.mean(forecast_values)
+        st.metric("Média Prevista", f"{avg_forecast:.2f}", help=f"Média das previsões para os próximos {horizon} dias")
+
+    # Forecast uncertainty info
+    with st.expander("⚠️ Entender a Incerteza das Previsões"):
+        st.markdown(f"""
+        ### 📊 Intervalo de Confiança (95%)
+        
+        A área cinzenta ao redor da previsão representa a **incerteza** do modelo:
+        
+        - **Intervalo estreito**: Modelo confiante na previsão
+        - **Intervalo largo**: Maior incerteza (observe com cautela)
+        - **Intervalo cresce com o tempo**: Normal! Previsões distantes são menos certeiras
+        
+        ### 🔢 Como é calculado?
+        
+        - Baseado na **variabilidade dos erros históricos** (resíduos)
+        - Aumenta proporcionalmente com a distância da previsão
+        - Pressupõe que padrões futuros serão similares aos passados
+        
+        ### ⚠️ Limitações Importantes:
+        
+        - **Não prevê events**: Choques de mercado, notícias, etc não são previstos
+        - **Pressupõe continuidade**: Assume que padrões históricos persistem
+        - **Pior longe no futuro**: A incerteza cresce com o horizonte
+        - **Sensível ao período de treinamento**: Diferentes períodos = diferentes previsões
+        
+        **Para {horizon} dias:** Intervalo estimado = {forecast_std:.2f} ± {1.96 * forecast_std:.2f} (base) até {1.96 * forecast_std * (1 + 0.05*horizon):.2f} (end)
+        """)
+
+    st.divider()
+
+except Exception as e:
+    st.error(f"❌ Erro ao gerar previsão: {str(e)}")
+    st.info("💡 Dica: Verifique se há dados suficientes e se as configurações estão adequadas.")
 
 # ============================================================
 # Export functionality
@@ -703,11 +931,12 @@ col_exp1, col_exp2 = st.columns(2)
 with col_exp1:
     # Export forecast to CSV
     forecast_df = pd.DataFrame({
-        'Data': future_dates.date,
+        'Data': future_dates,
         'Previsão': forecast_values,
         'IC_Superior_95': upper_bound,
         'IC_Inferior_95': lower_bound
     })
+    forecast_df['Data'] = forecast_df['Data'].dt.strftime('%Y-%m-%d')  # Format dates properly
 
     csv_forecast = forecast_df.to_csv(index=False).encode('utf-8')
     st.download_button(
@@ -720,14 +949,18 @@ with col_exp1:
 
 with col_exp2:
     # Export model metrics to CSV
+    mape_val = f"{mape:.1f}%" if mape and not np.isinf(mape) else "N/A"
+    mase_val = f"{mase:.2f}" if not np.isinf(mase) else "N/A"
+    
     metrics_df = pd.DataFrame({
-        'Métrica': ['MAE', 'RMSE', 'R²', 'MAPE'],
-        'Valor': [mae, rmse, r2, mape if mape else 'N/A'],
+        'Métrica': ['MAE', 'RMSE', 'R²', 'MAPE', 'MASE'],
+        'Valor': [mae, rmse, r2, mape_val, mase_val],
         'Contexto': [
             f"{mae_pct:.1f}% da média",
             f"{rmse_pct:.1f}% da média",
             f"{r2_pct:.1f}% explicado" if r2 > 0 else "Negativo",
-            f"{mape:.1f}%" if mape else "N/A"
+            mape_val,
+            mase_val
         ]
     })
 
