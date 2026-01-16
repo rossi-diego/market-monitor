@@ -564,19 +564,33 @@ residuals = y_test_true.values - pred_test
 # Create diagnostic plots
 fig_residuals = go.Figure()
 
-# Residuals over time
+# Residuals line
+fig_residuals.add_trace(
+    go.Scatter(
+        x=dates_test,
+        y=residuals,
+        mode="lines",
+        name="Resíduos",
+        line=dict(color="steelblue", width=1.5),
+        fill="tozeroy",
+        fillcolor="rgba(70, 130, 180, 0.3)"
+    )
+)
+
+# Residuals as markers for detail
 fig_residuals.add_trace(
     go.Scatter(
         x=dates_test,
         y=residuals,
         mode="markers",
-        name="Resíduos",
+        name="Pontos",
         marker=dict(
-            size=6,
+            size=5,
             color=residuals,
-            colorscale='RdBu',
+            colorscale='RdBu_r',
             showscale=True,
-            colorbar=dict(title="Erro")
+            colorbar=dict(title="Erro", thickness=20, len=0.7),
+            line=dict(width=0.5, color='white')
         ),
         text=[f"Erro: {r:.2f}" for r in residuals],
         hovertemplate="<b>%{text}</b><extra></extra>"
@@ -584,13 +598,19 @@ fig_residuals.add_trace(
 )
 
 # Add zero line
-fig_residuals.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="Zero Error")
+fig_residuals.add_hline(y=0, line_dash="dash", line_color="red", line_width=2, annotation_text="Sem Viés")
+
+# Add confidence bands (±1σ e ±2σ)
+fig_residuals.add_hline(y=residuals.std(), line_dash="dot", line_color="orange", line_width=1, annotation_text="+1σ")
+fig_residuals.add_hline(y=-residuals.std(), line_dash="dot", line_color="orange", line_width=1)
+fig_residuals.add_hline(y=2*residuals.std(), line_dash="dot", line_color="lightcoral", line_width=1, annotation_text="+2σ")
+fig_residuals.add_hline(y=-2*residuals.std(), line_dash="dot", line_color="lightcoral", line_width=1)
 
 fig_residuals.update_layout(
-    title="Resíduos ao Longo do Tempo",
+    title="Resíduos ao Longo do Tempo (com bandas de confiança)",
     xaxis_title="Data",
     yaxis_title="Erro (Real - Previsto)",
-    height=400,
+    height=500,
     hovermode='x unified',
 )
 
@@ -607,37 +627,63 @@ with col_res_2:
     st.metric("Máximo", f"{residuals.max():.2f}")
     st.metric("Maior erro (abs)", f"{np.abs(residuals).max():.2f}")
 
-# Distribution of residuals
+# Distribution of residuals - Professional histogram
 fig_dist = go.Figure()
 
+# Histogram
 fig_dist.add_trace(
     go.Histogram(
         x=residuals,
-        nbinsx=30,
+        nbinsx=max(15, int(np.sqrt(len(residuals)))),
         name="Distribuição de Erros",
-        marker=dict(color='lightblue', line=dict(color='darkblue'))
+        marker=dict(
+            color='steelblue',
+            line=dict(color='darkblue', width=1),
+            opacity=0.7
+        ),
+        opacity=0.7
     )
 )
 
-# Add normal distribution overlay
+# Add normal distribution curve overlay
 mu, sigma = residuals.mean(), residuals.std()
-x = np.linspace(residuals.min(), residuals.max(), 100)
+x = np.linspace(residuals.min() - sigma, residuals.max() + sigma, 200)
+y_normal = stats.norm.pdf(x, mu, sigma)
+
+# Scale to match histogram
+histogram_bin_width = (residuals.max() - residuals.min()) / max(15, int(np.sqrt(len(residuals))))
+y_scaled = y_normal * len(residuals) * histogram_bin_width
+
 fig_dist.add_trace(
     go.Scatter(
         x=x,
-        y=stats.norm.pdf(x, mu, sigma) * len(residuals) * (residuals.max() - residuals.min()) / 30,
+        y=y_scaled,
         mode='lines',
-        name='Distribuição Normal',
-        line=dict(color='red', width=2)
+        name='Distribuição Normal Teórica',
+        line=dict(color='red', width=3),
+        hovertemplate="<b>Erro: %{x:.2f}</b><br>Densidade: %{y:.4f}<extra></extra>"
     )
 )
 
+# Add vertical line at mean
+fig_dist.add_vline(
+    x=mu,
+    line_dash="dash",
+    line_color="green",
+    line_width=2,
+    annotation_text=f"Média: {mu:.4f}",
+    annotation_position="top right"
+)
+
 fig_dist.update_layout(
-    title="Distribuição dos Resíduos (Deveria ser Normal)",
-    xaxis_title="Erro",
+    title=f"Distribuição dos Resíduos (μ={mu:.4f}, σ={sigma:.2f})",
+    xaxis_title="Erro (Real - Previsto)",
     yaxis_title="Frequência",
-    height=400,
-    showlegend=True
+    height=500,
+    showlegend=True,
+    template="plotly_dark",
+    hovermode='x unified',
+    barmode='overlay'
 )
 
 st.plotly_chart(fig_dist, use_container_width=True)
@@ -769,28 +815,33 @@ try:
     forecast_values = []
 
     # Linha de features (sem date / target) em escala original
-    current_row = last_row.drop(columns=["date", target_col]).copy()
+    # Convert DataFrame row to Series for easier manipulation
+    current_row = last_row.drop(columns=["date", target_col]).copy().iloc[0]
 
     for step in range(horizon):
         # 1) Prepara features para previsão (aplica scaler se necessário)
+        # Reshape para 2D para o modelo
+        current_row_2d = current_row.values.reshape(1, -1)
+        
         if normalize and x_scaler is not None and y_scaler is not None:
-            current_x = x_scaler.transform(current_row)
+            current_x = x_scaler.transform(current_row_2d)
             next_pred_scaled = model.predict(current_x)[0]
             # Volta para a escala original do target
-            next_pred = y_scaler.inverse_transform(
+            next_pred = float(y_scaler.inverse_transform(
                 np.array([[next_pred_scaled]])
-            )[0, 0]
+            )[0, 0])
         else:
-            next_pred = model.predict(current_row)[0]
+            next_pred = float(model.predict(current_row_2d)[0])
 
         forecast_values.append(next_pred)
 
         # 2) Atualiza apenas os lags do target na linha atual (em escala ORIGINAL)
         if num_lags > 0:
             for i in range(num_lags, 1, -1):
-                current_row[f"{target_col}_lag{i}"] = current_row[
-                    f"{target_col}_lag{i-1}"
-                ]
+                lag_col = f"{target_col}_lag{i}"
+                prev_lag_col = f"{target_col}_lag{i-1}"
+                if lag_col in current_row.index and prev_lag_col in current_row.index:
+                    current_row[lag_col] = current_row[prev_lag_col]
             current_row[f"{target_col}_lag1"] = next_pred
         # As outras features (externas) permanecem constantes com o último valor conhecido.
 
