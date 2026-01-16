@@ -166,19 +166,19 @@ def display_statistics_panel(data, column, label):
             "Preço Atual",
             f"{stats['current']:.2f}",
             f"{stats['period_change']:+.2f}%",
-            "Preço mais recente e variação no período"
+            f"Preço mais recente e variação no período selecionado ({stats['data_points']} dias)"
         )
 
     with col2:
         display_metric_card(
-            "Volatilidade (período)",
+            "Volatilidade Diária",
             f"{stats['vol_period']:.2f}%",
-            help_text=f"Volatilidade diária: {stats['vol_period']:.2f}% | Anualizada: {stats['vol_annual']:.1f}%"
+            help_text=f"Volatilidade diária no período: {stats['vol_period']:.2f}% | Anualizada (252 dias): {stats['vol_annual']:.1f}%"
         )
 
     with col3:
         display_metric_card(
-            "Mínimo / Máximo",
+            "Min / Max (período)",
             f"{stats['min']:.2f}",
             f"Max: {stats['max']:.2f}",
             "Range de preços no período selecionado"
@@ -186,9 +186,9 @@ def display_statistics_panel(data, column, label):
 
     with col4:
         display_metric_card(
-            "Média",
+            "Média (período)",
             f"{stats['mean']:.2f}",
-            help_text="Preço médio no período"
+            help_text="Preço médio no período selecionado"
         )
 
     # Advanced metrics row
@@ -200,28 +200,28 @@ def display_statistics_panel(data, column, label):
         z_interp = "Sobrecomprado" if stats['z_score'] > 1.5 else "Sobrevendido" if stats['z_score'] < -1.5 else "Neutro"
         z_color = "🔴" if stats['z_score'] > 1.5 else "🟢" if stats['z_score'] < -1.5 else "🟡"
         display_metric_card(
-            "Z-Score",
+            "Z-Score (período)",
             f"{stats['z_score']:.2f}",
             f"{z_color} {z_interp}",
-            "Distância do preço atual em relação à média (em desvios padrão). >1.5: caro, <-1.5: barato"
+            "Distância do preço atual da média DO PERÍODO (em desvios padrão). >1.5: caro, <-1.5: barato"
         )
 
     with col6:
         sharpe_color = "🟢" if stats['sharpe'] > 1 else "🟡" if stats['sharpe'] > 0 else "🔴"
         display_metric_card(
-            "Sharpe Ratio",
+            "Sharpe (anualizado)",
             f"{stats['sharpe']:.2f}",
             f"{sharpe_color}",
-            "Retorno ajustado ao risco (anualizado). >1: bom, >2: muito bom"
+            "Retorno ajustado ao risco ANUALIZADO (252 dias). >1: bom, >2: muito bom"
         )
 
     with col7:
         dd_color = "🟢" if stats['max_drawdown'] > -10 else "🟡" if stats['max_drawdown'] > -20 else "🔴"
         display_metric_card(
-            "Max Drawdown",
+            "Max DD (período)",
             f"{stats['max_drawdown']:.1f}%",
             f"{dd_color}",
-            "Maior queda do pico ao vale no período"
+            "Maior queda do pico ao vale NO PERÍODO selecionado"
         )
 
     with col8:
@@ -229,10 +229,10 @@ def display_statistics_panel(data, column, label):
         dist_from_mean = ((stats['current'] - stats['mean']) / stats['mean'] * 100)
         dist_color = "↗️" if dist_from_mean > 0 else "↘️"
         display_metric_card(
-            "vs Média",
+            "vs Média (período)",
             f"{dist_from_mean:+.1f}%",
             f"{dist_color}",
-            "Distância percentual do preço atual em relação à média"
+            "Distância % do preço atual da média DO PERÍODO selecionado"
         )
 
     # Data quality indicator

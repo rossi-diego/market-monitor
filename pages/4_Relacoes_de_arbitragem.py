@@ -193,14 +193,14 @@ with st.container(border=True):
             "Valor Atual",
             f"{current_value:.3f}",
             f"{period_change:+.1f}%",
-            help="Último valor do ratio e variação no período"
+            help=f"Último valor do ratio e variação NO PERÍODO selecionado ({len(view)} dias)"
         )
 
     with col2:
         st.metric(
-            "Média",
+            "Média (período)",
             f"{mean_value:.3f}",
-            help="Média do ratio no período selecionado"
+            help="Média do ratio NO PERÍODO selecionado"
         )
 
     with col3:
@@ -208,28 +208,28 @@ with st.container(border=True):
         z_interp = "Caro" if z_score > 1.5 else "Barato" if z_score < -1.5 else "Normal"
         z_color = "🔴" if z_score > 1.5 else "🟢" if z_score < -1.5 else "🟡"
         st.metric(
-            "Z-Score",
+            "Z-Score (período)",
             f"{z_score:.2f}",
             f"{z_color} {z_interp}",
-            help="Distância da média em desvios padrão. >1.5: caro, <-1.5: barato"
+            help="Distância da média DO PERÍODO em desvios padrão. >1.5: caro, <-1.5: barato"
         )
 
     with col4:
         st.metric(
-            "Min / Max",
+            "Min / Max (período)",
             f"{min_value:.3f}",
             f"Max: {max_value:.3f}",
-            help="Range de valores no período"
+            help="Range de valores NO PERÍODO selecionado"
         )
 
     with col5:
         volatility_level = "Alta" if cv > 15 else "Moderada" if cv > 8 else "Baixa"
         vol_color = "🔴" if cv > 15 else "🟡" if cv > 8 else "🟢"
         st.metric(
-            "Volatilidade",
+            "Volatilidade (período)",
             f"{cv:.1f}%",
             f"{vol_color} {volatility_level}",
-            help="Coeficiente de variação (desvio/média)"
+            help="Coeficiente de variação DO PERÍODO (desvio/média)"
         )
 
     # Trading signal
