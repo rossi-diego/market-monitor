@@ -842,13 +842,25 @@ try:
         )
     )
 
-    # Add vertical line separating history from forecast
-    fig_combined.add_vline(
-        x=last_date.isoformat(),  # Convert Timestamp to ISO string
-        line_dash="dot",
-        line_color="gray",
-        annotation_text="Início da Previsão",
-        annotation_position="top"
+    # Add vertical line separating history from forecast using add_shape
+    fig_combined.add_shape(
+        type="line",
+        x0=last_date,
+        x1=last_date,
+        y0=0,
+        y1=1,
+        yref="paper",
+        line=dict(color="gray", width=2, dash="dot"),
+    )
+
+    # Add annotation for the line
+    fig_combined.add_annotation(
+        x=last_date,
+        y=1.05,
+        yref="paper",
+        text="Início da Previsão",
+        showarrow=False,
+        font=dict(size=10, color="gray"),
     )
 
     fig_combined.update_layout(
