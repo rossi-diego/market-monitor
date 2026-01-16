@@ -384,5 +384,4 @@ def main():
 
 
 # Run main function
-if __name__ == "__main__":
-    main()
+main()
