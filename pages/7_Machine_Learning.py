@@ -6,8 +6,8 @@ This page allows the user to:
 
 1. Select an asset (target variable).
 2. Choose which dataset columns will be used as FEATURES.
-3. Choose number of LAGS (0 to 10).
-4. Select ML model (Ridge, Random Forest, XGBoost).
+3. Choose number of LAGS (0 to 3).
+4. Select ML model from multiple options.
 5. View model performance vs actual (historical backtest).
 6. Produce OUT-OF-SAMPLE FORECAST for up to 45 future days.
 
@@ -25,13 +25,12 @@ The page also includes explanations for:
 import pandas as pd
 import numpy as np
 import streamlit as st
-from scipy import stats
 
 from sklearn.linear_model import Ridge, Lasso, ElasticNet
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
 from sklearn.neural_network import MLPRegressor
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, mean_absolute_percentage_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
 try:
@@ -47,7 +46,7 @@ except ImportError:
     HAS_LGBM = False
 
 from src.data_pipeline import df
-from src.utils import apply_theme, date_range_picker, section
+from src.utils import apply_theme, date_range_picker
 import plotly.graph_objects as go
 
 # Theme
@@ -63,7 +62,7 @@ st.divider()
 # ============================================================
 BASE = df.copy()
 BASE["date"] = pd.to_datetime(BASE["date"], errors="coerce")
-BASE = BASE.sort_values("date")
+BASE = BASE.sort_values("date").reset_index(drop=True)
 
 # ============================================================
 # Explanation Expander
@@ -76,7 +75,7 @@ with st.expander("📘 Como funciona o modelo de Machine Learning?", expanded=Fa
     Lags são valores passados da própria série temporal que estamos prevendo.
     - **Lag 1** = preço de ontem (t-1)
     - **Lag 2** = preço de anteontem (t-2)
-    - **Lag 5** = preço de 5 dias atrás (t-5)
+    - **Lag 3** = preço de 3 dias atrás (t-3)
 
     Os lags ajudam o modelo a capturar **tendência, momentum e autocorrelação** da série.
 
@@ -98,15 +97,17 @@ with st.expander("📘 Como funciona o modelo de Machine Learning?", expanded=Fa
     | Métrica | Significado | Interpretação |
     |---------|-------------|---------------|
     | **MAE** | Erro médio absoluto | Erro típico em unidades do preço |
-    | **RMSE** | Raiz do erro quadrático médio | Penaliza erros grandes, mesma unidade do preço |
-    | **R²** | Coeficiente de determinação | % da variância explicada (0-1). Negativo = pior que média |
-    | **MAPE** | Erro percentual médio absoluto | Erro em % - mais fácil de interpretar |
+    | **RMSE** | Raiz do erro quadrático médio | Penaliza erros grandes |
+    | **R²** | Coeficiente de determinação | % da variância explicada (0-1) |
+    | **MAPE** | Erro percentual médio | Erro em % do valor real |
 
     ### 🎯 Escolhendo o Modelo
 
-    - **Ridge**: Rápido, simples, bom para relações lineares
+    - **Ridge/Lasso/ElasticNet**: Rápidos, lineares, bons para relações simples
     - **Random Forest**: Robusto, captura não-linearidades, menos overfitting
-    - **XGBoost**: Poderoso, melhor performance, requer mais dados
+    - **Gradient Boosting/XGBoost/LightGBM**: Máxima performance, padrões complexos
+    - **SVR**: Kernel-based, bom para dados de alta dimensão
+    - **Neural Network**: Máxima flexibilidade, requer mais dados
     """)
 
 st.divider()
@@ -135,12 +136,13 @@ with st.container(border=True):
     with col2:
         # Calculate correlation with target to suggest best features
         default_features = []
+        correlations = {}
+
         if target_col:
-            correlations = {}
             for col in valid_cols:
                 if col != target_col:
                     try:
-                        # Calculate correlation
+                        # Calculate absolute correlation
                         corr_data = BASE[[target_col, col]].dropna()
                         if len(corr_data) > 10:
                             corr = corr_data.corr().iloc[0, 1]
@@ -171,8 +173,8 @@ with st.container(border=True):
                 selected_corrs = [(f, correlations.get(f, 0)) for f in feature_cols if f in correlations]
                 selected_corrs.sort(key=lambda x: x[1], reverse=True)
 
-                st.markdown("**Top 5 Features Mais Correlacionadas:**")
-                for i, (feat, corr) in enumerate(selected_corrs[:5], 1):
+                st.markdown("**Features Selecionadas (ordenadas por correlação):**")
+                for i, (feat, corr) in enumerate(selected_corrs, 1):
                     corr_strength = "Forte" if corr > 0.7 else "Moderada" if corr > 0.4 else "Fraca"
                     corr_color = "🟢" if corr > 0.7 else "🟡" if corr > 0.4 else "🔴"
                     st.caption(f"{i}. **{feat}**: {corr:.3f} {corr_color} ({corr_strength})")
@@ -188,52 +190,54 @@ with st.container(border=True):
     col_model, col_lags, col_horizon = st.columns(3)
 
     with col_model:
+        # Build models dictionary with better organization
         models_dict = {
-            "Ridge Regression": Ridge(alpha=1.0),
-            "Lasso Regression": Lasso(alpha=0.01),
-            "Elastic Net": ElasticNet(alpha=0.01, l1_ratio=0.5),
-            "Random Forest": RandomForestRegressor(n_estimators=500, max_depth=15, random_state=42, n_jobs=-1),
+            "Ridge Regression": Ridge(alpha=1.0, random_state=42),
+            "Lasso Regression": Lasso(alpha=0.01, random_state=42, max_iter=2000),
+            "Elastic Net": ElasticNet(alpha=0.01, l1_ratio=0.5, random_state=42, max_iter=2000),
+            "Random Forest": RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42, n_jobs=-1),
             "Gradient Boosting": GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=5, random_state=42),
-            "SVR (Support Vector)": SVR(kernel='rbf', C=100, epsilon=0.1),
-            "Neural Network (MLP)": MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=1000, learning_rate_init=0.001, random_state=42),
         }
+
         if HAS_XGB:
             models_dict["XGBoost"] = XGBRegressor(
-                n_estimators=600,
+                n_estimators=300,
                 learning_rate=0.05,
                 max_depth=6,
-                subsample=0.9,
-                colsample_bytree=0.9,
+                subsample=0.8,
+                colsample_bytree=0.8,
                 random_state=42,
+                verbosity=0
             )
+
         if HAS_LGBM:
             models_dict["LightGBM"] = LGBMRegressor(
-                n_estimators=600,
+                n_estimators=300,
                 learning_rate=0.05,
                 max_depth=6,
                 num_leaves=31,
                 random_state=42,
-                verbose=-1,
+                verbosity=-1,
+                force_col_wise=True
             )
 
         model_label = st.selectbox(
             "Algoritmo",
             list(models_dict.keys()),
-            help="Ridge: linear rápido | Lasso: com regularização L1 | RF: não-linear robusto | XGB/LGBM: máxima performance | SVR: kernel baseado | MLP: redes neurais"
+            index=0,
+            help="Escolha o algoritmo de ML para treinar"
         )
         model = models_dict[model_label]
 
         # Model description
         model_descriptions = {
-            "Ridge Regression": "✅ Rápido e interpretável\n✅ Bom para relações lineares\n✅ Robusto com multicolinearidade\n⚠️ Pode não capturar não-linearidades",
-            "Lasso Regression": "✅ Seleção automática de features\n✅ Simples e interpretável\n⚠️ Menos eficaz com muitas features\n⚠️ Sensível a escala",
-            "Elastic Net": "✅ Combina Ridge + Lasso\n✅ Bom com muitas features correlacionadas\n✅ Seleção de features\n⚠️ Menos preciso que ensemble methods",
-            "Random Forest": "✅ Robusto a outliers\n✅ Captura não-linearidades\n✅ Menos propenso a overfitting\n✅ Paralelizável",
-            "Gradient Boosting": "✅ Melhor que RF em muitos casos\n✅ Captura padrões complexos\n⚠️ Risco de overfitting\n⚠️ Mais lento para treinar",
-            "SVR (Support Vector)": "✅ Bom com high-dimensional data\n✅ Kernel flex para não-linearidades\n⚠️ Requer normalização\n⚠️ Lento com muitos dados",
-            "Neural Network (MLP)": "✅ Máxima flexibilidade\n✅ Padrões muito complexos\n⚠️ Caixa preta (difícil interpretar)\n⚠️ Requer mais dados",
-            "XGBoost": "✅ Melhor performance geral\n✅ Captura padrões muito complexos\n✅ Feature importance confiável\n⚠️ Requer mais dados para treinar",
-            "LightGBM": "✅ Mais rápido que XGBoost\n✅ Menor consumo de memória\n✅ Excelente performance\n⚠️ Pode overfittar com poucos dados",
+            "Ridge Regression": "✅ Rápido e estável\n✅ Bom para relações lineares\n⚠️ Não captura não-linearidades",
+            "Lasso Regression": "✅ Seleção automática de features\n✅ Interpretável\n⚠️ Pode ser instável",
+            "Elastic Net": "✅ Combina Ridge + Lasso\n✅ Equilibrado\n⚠️ Requer tuning",
+            "Random Forest": "✅ Robusto e preciso\n✅ Captura não-linearidades\n✅ Menos overfitting",
+            "Gradient Boosting": "✅ Alta precisão\n✅ Padrões complexos\n⚠️ Mais lento",
+            "XGBoost": "✅ Estado da arte\n✅ Excelente performance\n✅ Rápido e eficiente",
+            "LightGBM": "✅ Mais rápido que XGBoost\n✅ Eficiente em memória\n✅ Ótima precisão",
         }
         st.caption(model_descriptions.get(model_label, ""))
 
@@ -388,19 +392,18 @@ with st.container(border=True):
         """Calculate MAPE with proper handling of edge cases."""
         if len(y_true) == 0:
             return None
-        
+
         # Avoid division by zero
         mask = y_true != 0
         if mask.sum() == 0:
             return None
-        
+
         mape_val = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
         return mape_val
 
     mape = safe_mape(y_test_true.values, pred_test)
 
     # Additional metrics: MASE (Mean Absolute Scaled Error)
-    naive_forecast = y_test_true.iloc[:-1].values
     naive_error = np.mean(np.abs(np.diff(y_test_true.values)))
     mase = mae / (naive_error + 1e-8) if naive_error > 0 else np.inf
 
@@ -478,7 +481,6 @@ with st.container(border=True):
         - Erro médio: {mae:.2f} unidades ({mae_pct:.1f}% da média)
         - {"✅ Excelente!" if mae_pct < 3 else "⚠️ Moderado" if mae_pct < 7 else "❌ Alto"}
         - Significa que, em média, o modelo erra {mae:.2f} unidades
-        - Mais interpretável que RMSE por usar escala original
 
         **RMSE (Root Mean Squared Error)**
         - RMSE: {rmse:.2f} ({rmse_pct:.1f}% da média)
@@ -518,12 +520,12 @@ st.markdown("### 🧠 Importância das Features")
 
 importance_values = None
 
-# Modelos tipo árvore (Random Forest, XGBoost)
+# Modelos tipo árvore (Random Forest, XGBoost, etc)
 if hasattr(model, "feature_importances_"):
     importance_values = model.feature_importances_
     importance_type = "Importância (Gini/Gain)"
 
-# Modelos lineares (Ridge) – usamos o valor absoluto dos coeficientes
+# Modelos lineares (Ridge, Lasso) – usamos o valor absoluto dos coeficientes
 elif hasattr(model, "coef_"):
     coef = model.coef_
     importance_values = np.abs(np.ravel(coef))
@@ -593,6 +595,9 @@ st.divider()
 # ============================================================
 # Residual Analysis (Simplified)
 # ============================================================
+# Calculate residuals ONCE here for use everywhere
+residuals = y_test_true.values - pred_test
+
 with st.expander("🔍 Análise de Resíduos (Diagnósticos do Modelo)", expanded=False):
     st.markdown("""
     ### 📊 O que são Resíduos?
@@ -602,9 +607,6 @@ with st.expander("🔍 Análise de Resíduos (Diagnósticos do Modelo)", expande
     - **Negativo**: Modelo superestimou (previu mais)
     - **Próximo de 0**: Previsão precisa
     """)
-
-    # Calculate residuals from test set
-    residuals = y_test_true.values - pred_test
 
     # Simple residual statistics
     col_r1, col_r2, col_r3, col_r4 = st.columns(4)
@@ -707,46 +709,16 @@ fig_hist.add_trace(
     )
 )
 
-# Add error bands
-residuals = y_test_true - pred_test
-fig_hist.add_trace(
-    go.Scatter(
-        x=dates_test,
-        y=residuals,
-        mode="lines",
-        name="Erro (Residual)",
-        line=dict(color="gray", width=1),
-        yaxis="y2",
-        opacity=0.5
-    )
-)
-
 fig_hist.update_layout(
     title="Comparação: Valores Reais vs Previsões do Modelo",
     xaxis_title="Data",
     yaxis_title=f"{target_col} (Preço)",
-    yaxis2=dict(
-        title="Erro (Residual)",
-        overlaying="y",
-        side="right",
-        showgrid=False
-    ),
     hovermode='x unified',
-    height=500,
+    height=450,
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
 )
 
 st.plotly_chart(fig_hist, use_container_width=True)
-
-# Residual statistics
-col_res1, col_res2, col_res3 = st.columns(3)
-with col_res1:
-    st.metric("Erro Médio", f"{residuals.mean():.2f}", help="Viés do modelo (deveria ser ~0)")
-with col_res2:
-    st.metric("Erro Std Dev", f"{residuals.std():.2f}", help="Variabilidade dos erros")
-with col_res3:
-    max_error = residuals.abs().max()
-    st.metric("Maior Erro", f"{max_error:.2f}", help="Maior erro absoluto observado")
 
 st.divider()
 
@@ -756,33 +728,28 @@ st.divider()
 st.markdown(f"### 🔮 Previsão Futura ({horizon} dias)")
 
 try:
-    # Usamos a última linha disponível (com lags já preenchidos) como ponto de partida
+    # Get last row for prediction
     last_row = df_ml.iloc[-1:].copy()
-
-    # Ensure date is Timestamp type and handle properly
     last_date = pd.to_datetime(df_ml["date"].iloc[-1])
 
-    # Create future dates starting from the day after last date
-    # Use timedelta properly to avoid the error
+    # Create future dates properly
     future_dates = pd.DatetimeIndex([
         last_date + pd.Timedelta(days=i) for i in range(1, horizon + 1)
     ])
 
     forecast_values = []
 
-    # Linha de features (sem date / target) em escala original
-    # Convert DataFrame row to Series for easier manipulation
+    # Convert to Series for easier manipulation
     current_row = last_row.drop(columns=["date", target_col]).copy().iloc[0]
 
+    # Multi-step forecasting
     for step in range(horizon):
-        # 1) Prepara features para previsão (aplica scaler se necessário)
-        # Reshape para 2D para o modelo
+        # Reshape for model prediction
         current_row_2d = current_row.values.reshape(1, -1)
-        
+
         if normalize and x_scaler is not None and y_scaler is not None:
             current_x = x_scaler.transform(current_row_2d)
             next_pred_scaled = model.predict(current_x)[0]
-            # Volta para a escala original do target
             next_pred = float(y_scaler.inverse_transform(
                 np.array([[next_pred_scaled]])
             )[0, 0])
@@ -791,7 +758,7 @@ try:
 
         forecast_values.append(next_pred)
 
-        # 2) Atualiza apenas os lags do target na linha atual (em escala ORIGINAL)
+        # Update lags if using them
         if num_lags > 0:
             for i in range(num_lags, 1, -1):
                 lag_col = f"{target_col}_lag{i}"
@@ -799,15 +766,14 @@ try:
                 if lag_col in current_row.index and prev_lag_col in current_row.index:
                     current_row[lag_col] = current_row[prev_lag_col]
             current_row[f"{target_col}_lag1"] = next_pred
-        # As outras features (externas) permanecem constantes com o último valor conhecido.
 
     forecast_values = np.array(forecast_values, dtype=float)
 
-    # Calculate adaptive confidence interval (increases with forecast horizon)
+    # Calculate confidence interval
     forecast_std = float(residuals.std())
     forecast_steps = np.arange(1, horizon + 1, dtype=float)
-    
-    # Uncertainty grows with horizon: std * (1 + 0.05 * step)
+
+    # Uncertainty grows with horizon
     uncertainty_multiplier = 1.0 + (0.05 * forecast_steps)
     upper_bound = forecast_values + (1.96 * forecast_std * uncertainty_multiplier)
     lower_bound = forecast_values - (1.96 * forecast_std * uncertainty_multiplier)
@@ -907,27 +873,27 @@ try:
     with st.expander("⚠️ Entender a Incerteza das Previsões"):
         st.markdown(f"""
         ### 📊 Intervalo de Confiança (95%)
-        
+
         A área cinzenta ao redor da previsão representa a **incerteza** do modelo:
-        
+
         - **Intervalo estreito**: Modelo confiante na previsão
         - **Intervalo largo**: Maior incerteza (observe com cautela)
         - **Intervalo cresce com o tempo**: Normal! Previsões distantes são menos certeiras
-        
+
         ### 🔢 Como é calculado?
-        
+
         - Baseado na **variabilidade dos erros históricos** (resíduos)
         - Aumenta proporcionalmente com a distância da previsão
         - Pressupõe que padrões futuros serão similares aos passados
-        
+
         ### ⚠️ Limitações Importantes:
-        
-        - **Não prevê events**: Choques de mercado, notícias, etc não são previstos
+
+        - **Não prevê eventos**: Choques de mercado, notícias, etc não são previstos
         - **Pressupõe continuidade**: Assume que padrões históricos persistem
         - **Pior longe no futuro**: A incerteza cresce com o horizonte
         - **Sensível ao período de treinamento**: Diferentes períodos = diferentes previsões
-        
-        **Para {horizon} dias:** Intervalo estimado = {forecast_std:.2f} ± {1.96 * forecast_std:.2f} (base) até {1.96 * forecast_std * (1 + 0.05*horizon):.2f} (end)
+
+        **Para {horizon} dias:** Intervalo estimado = {forecast_std:.2f} ± {1.96 * forecast_std:.2f} (base) até {1.96 * forecast_std * (1 + 0.05*horizon):.2f} (final)
         """)
 
     st.divider()
@@ -935,6 +901,9 @@ try:
 except Exception as e:
     st.error(f"❌ Erro ao gerar previsão: {str(e)}")
     st.info("💡 Dica: Verifique se há dados suficientes e se as configurações estão adequadas.")
+    import traceback
+    with st.expander("🔧 Detalhes do erro (para debug)"):
+        st.code(traceback.format_exc())
 
 # ============================================================
 # Export functionality
@@ -968,7 +937,7 @@ with col_exp2:
     # Export model metrics to CSV
     mape_val = f"{mape:.1f}%" if mape and not np.isinf(mape) else "N/A"
     mase_val = f"{mase:.2f}" if not np.isinf(mase) else "N/A"
-    
+
     metrics_df = pd.DataFrame({
         'Métrica': ['MAE', 'RMSE', 'R²', 'MAPE', 'MASE'],
         'Valor': [mae, rmse, r2, mape_val, mase_val],
