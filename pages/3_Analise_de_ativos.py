@@ -89,15 +89,41 @@ def calculate_statistics(data, column):
     # Calculate returns
     returns = series.pct_change().dropna()
 
+    # Calculate number of trading days in period
+    num_days = len(series)
+
+    # Volatility calculations (period and annualized)
+    vol_period = returns.std() * 100  # Volatility in the selected period
+    vol_annual = returns.std() * np.sqrt(252) * 100  # Annualized volatility
+
+    # Sharpe-like metric (assuming risk-free rate = 0 for simplicity)
+    mean_return = returns.mean()
+    sharpe = (mean_return / returns.std() * np.sqrt(252)) if returns.std() > 0 else 0
+
+    # Max drawdown
+    cumulative = (1 + returns).cumprod()
+    running_max = cumulative.expanding().max()
+    drawdown = (cumulative - running_max) / running_max
+    max_drawdown = drawdown.min() * 100
+
+    # Distance from mean (Z-score)
+    mean_price = series.mean()
+    std_price = series.std()
+    z_score = (current_price - mean_price) / std_price if std_price > 0 else 0
+
     stats = {
         "current": current_price,
         "period_change": ((current_price - first_price) / first_price * 100),
         "min": series.min(),
         "max": series.max(),
-        "mean": series.mean(),
-        "volatility": returns.std() * np.sqrt(252) * 100,  # Annualized
+        "mean": mean_price,
+        "vol_period": vol_period,
+        "vol_annual": vol_annual,
+        "sharpe": sharpe,
+        "max_drawdown": max_drawdown,
+        "z_score": z_score,
         "last_update": data["date"].max(),
-        "data_points": len(series),
+        "data_points": num_days,
     }
 
     return stats
@@ -132,6 +158,7 @@ def display_statistics_panel(data, column, label):
 
     st.markdown(f"### 📊 Estatísticas - {label}")
 
+    # Main metrics row
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
@@ -139,84 +166,277 @@ def display_statistics_panel(data, column, label):
             "Preço Atual",
             f"{stats['current']:.2f}",
             f"{stats['period_change']:+.2f}%",
-            "Preço mais recente no período"
+            "Preço mais recente e variação no período"
         )
 
     with col2:
         display_metric_card(
-            "Volatilidade (anual)",
-            f"{stats['volatility']:.1f}%",
-            help_text="Volatilidade anualizada dos retornos"
+            "Volatilidade (período)",
+            f"{stats['vol_period']:.2f}%",
+            help_text=f"Volatilidade diária: {stats['vol_period']:.2f}% | Anualizada: {stats['vol_annual']:.1f}%"
         )
 
     with col3:
         display_metric_card(
-            "Mínimo",
+            "Mínimo / Máximo",
             f"{stats['min']:.2f}",
-            help_text="Menor preço no período"
+            f"Max: {stats['max']:.2f}",
+            "Range de preços no período selecionado"
         )
 
     with col4:
         display_metric_card(
-            "Máximo",
-            f"{stats['max']:.2f}",
-            help_text="Maior preço no período"
+            "Média",
+            f"{stats['mean']:.2f}",
+            help_text="Preço médio no período"
+        )
+
+    # Advanced metrics row
+    st.markdown("#### 🎯 Métricas para Trading")
+    col5, col6, col7, col8 = st.columns(4)
+
+    with col5:
+        # Z-Score interpretation
+        z_interp = "Sobrecomprado" if stats['z_score'] > 1.5 else "Sobrevendido" if stats['z_score'] < -1.5 else "Neutro"
+        z_color = "🔴" if stats['z_score'] > 1.5 else "🟢" if stats['z_score'] < -1.5 else "🟡"
+        display_metric_card(
+            "Z-Score",
+            f"{stats['z_score']:.2f}",
+            f"{z_color} {z_interp}",
+            "Distância do preço atual em relação à média (em desvios padrão). >1.5: caro, <-1.5: barato"
+        )
+
+    with col6:
+        sharpe_color = "🟢" if stats['sharpe'] > 1 else "🟡" if stats['sharpe'] > 0 else "🔴"
+        display_metric_card(
+            "Sharpe Ratio",
+            f"{stats['sharpe']:.2f}",
+            f"{sharpe_color}",
+            "Retorno ajustado ao risco (anualizado). >1: bom, >2: muito bom"
+        )
+
+    with col7:
+        dd_color = "🟢" if stats['max_drawdown'] > -10 else "🟡" if stats['max_drawdown'] > -20 else "🔴"
+        display_metric_card(
+            "Max Drawdown",
+            f"{stats['max_drawdown']:.1f}%",
+            f"{dd_color}",
+            "Maior queda do pico ao vale no período"
+        )
+
+    with col8:
+        # Distance from mean in percentage
+        dist_from_mean = ((stats['current'] - stats['mean']) / stats['mean'] * 100)
+        dist_color = "↗️" if dist_from_mean > 0 else "↘️"
+        display_metric_card(
+            "vs Média",
+            f"{dist_from_mean:+.1f}%",
+            f"{dist_color}",
+            "Distância percentual do preço atual em relação à média"
         )
 
     # Data quality indicator
     st.caption(f"📅 Última atualização: {stats['last_update'].strftime('%d/%m/%Y')} | "
-               f"📈 {stats['data_points']} pontos de dados")
+               f"📈 {stats['data_points']} pontos de dados no período")
 
 
 def calculate_correlation(data, col1, col2):
-    """Calculate correlation between two series."""
+    """Calculate Pearson and Spearman correlations between two series."""
+    if data.empty or col1 not in data.columns or col2 not in data.columns:
+        return None, None
+
+    # Pearson correlation (linear relationship)
+    pearson = data[[col1, col2]].corr(method='pearson').iloc[0, 1]
+
+    # Spearman correlation (monotonic relationship)
+    spearman = data[[col1, col2]].corr(method='spearman').iloc[0, 1]
+
+    return pearson, spearman
+
+
+def calculate_beta(data, col1, col2):
+    """Calculate beta of col1 relative to col2 (col2 is the market/benchmark)."""
     if data.empty or col1 not in data.columns or col2 not in data.columns:
         return None
 
-    return data[[col1, col2]].corr().iloc[0, 1]
+    # Calculate returns
+    returns1 = data[col1].pct_change().dropna()
+    returns2 = data[col2].pct_change().dropna()
+
+    # Align the series
+    aligned = pd.DataFrame({'asset': returns1, 'benchmark': returns2}).dropna()
+
+    if aligned.empty or len(aligned) < 2:
+        return None
+
+    # Beta = Cov(asset, benchmark) / Var(benchmark)
+    covariance = aligned['asset'].cov(aligned['benchmark'])
+    variance = aligned['benchmark'].var()
+
+    if variance == 0:
+        return None
+
+    beta = covariance / variance
+    return beta
 
 
 def display_comparison_stats(data, col1, col2, label1, label2):
     """Display comparison statistics between two assets."""
     stats1 = calculate_statistics(data, col1)
     stats2 = calculate_statistics(data, col2)
-    corr = calculate_correlation(data, col1, col2)
+    pearson, spearman = calculate_correlation(data, col1, col2)
+    beta = calculate_beta(data, col1, col2)
 
     if not stats1 or not stats2:
         return
 
     st.markdown("### 📊 Estatísticas Comparativas")
 
-    col_a, col_b, col_c = st.columns(3)
+    # Correlation and Beta section
+    with st.container(border=True):
+        st.markdown("#### 🔗 Relação entre os ativos")
 
-    with col_a:
-        st.markdown(f"**{label1}**")
-        st.metric("Variação no período", f"{stats1['period_change']:+.2f}%")
-        st.metric("Volatilidade", f"{stats1['volatility']:.1f}%")
+        col_corr1, col_corr2, col_beta = st.columns(3)
 
-    with col_b:
-        st.markdown(f"**{label2}**")
-        st.metric("Variação no período", f"{stats2['period_change']:+.2f}%")
-        st.metric("Volatilidade", f"{stats2['volatility']:.1f}%")
+        with col_corr1:
+            st.markdown("**Correlação de Pearson**")
+            if pearson is not None:
+                corr_color = "🟢" if abs(pearson) > 0.7 else "🟡" if abs(pearson) > 0.3 else "🔴"
+                st.metric(
+                    "Linear",
+                    f"{pearson:.3f}",
+                    f"{corr_color}",
+                    help="Mede relação LINEAR entre os ativos. 1 = movem juntos, -1 = movem opostos, 0 = sem relação"
+                )
+                if abs(pearson) > 0.7:
+                    st.caption("✅ Forte relação linear")
+                elif abs(pearson) > 0.3:
+                    st.caption("⚠️ Relação linear moderada")
+                else:
+                    st.caption("❌ Relação linear fraca")
 
-    with col_c:
-        st.markdown("**Correlação**")
-        if corr is not None:
-            corr_pct = corr * 100
-            st.metric(
-                "Coeficiente",
-                f"{corr:.3f}",
-                f"{corr_pct:+.1f}%",
-                help="Correlação de Pearson entre os ativos"
-            )
+        with col_corr2:
+            st.markdown("**Correlação de Spearman**")
+            if spearman is not None:
+                spear_color = "🟢" if abs(spearman) > 0.7 else "🟡" if abs(spearman) > 0.3 else "🔴"
+                st.metric(
+                    "Monotônica",
+                    f"{spearman:.3f}",
+                    f"{spear_color}",
+                    help="Mede relação MONOTÔNICA (mesma direção, mas não necessariamente linear). Mais robusta a outliers"
+                )
+                if abs(spearman) > 0.7:
+                    st.caption("✅ Forte relação monotônica")
+                elif abs(spearman) > 0.3:
+                    st.caption("⚠️ Relação monotônica moderada")
+                else:
+                    st.caption("❌ Relação monotônica fraca")
 
-            # Interpretation
-            if abs(corr) > 0.7:
-                st.success("Correlação forte")
-            elif abs(corr) > 0.3:
-                st.info("Correlação moderada")
+        with col_beta:
+            st.markdown(f"**Beta ({label1} vs {label2})**")
+            if beta is not None:
+                beta_interp = "Alta sensibilidade" if abs(beta) > 1.5 else "Moderada" if abs(beta) > 0.5 else "Baixa"
+                beta_color = "🔴" if abs(beta) > 1.5 else "🟡" if abs(beta) > 0.5 else "🟢"
+                st.metric(
+                    "Sensibilidade",
+                    f"{beta:.2f}",
+                    f"{beta_color} {beta_interp}",
+                    help=f"Quando {label2} varia 1%, {label1} tende a variar {beta:.2f}%. Beta>1: mais volátil, Beta<1: menos volátil"
+                )
+                st.caption(f"Se {label2} sobe 1%, {label1} {'sobe' if beta > 0 else 'desce'} ~{abs(beta):.1f}%")
             else:
-                st.warning("Correlação fraca")
+                st.metric("Sensibilidade", "N/A", help="Dados insuficientes para calcular Beta")
+
+    # Side-by-side metrics comparison
+    st.markdown("#### 📈 Métricas de Trading")
+
+    # Basic metrics
+    with st.container(border=True):
+        st.markdown("**Preço e Variação**")
+        col_a1, col_a2, col_a3, col_a4 = st.columns(4)
+
+        with col_a1:
+            st.metric(f"{label1} - Atual", f"{stats1['current']:.2f}")
+        with col_a2:
+            change_color1 = "🟢" if stats1['period_change'] > 0 else "🔴"
+            st.metric(f"{label1} - Variação", f"{stats1['period_change']:+.2f}%", f"{change_color1}")
+        with col_a3:
+            st.metric(f"{label2} - Atual", f"{stats2['current']:.2f}")
+        with col_a4:
+            change_color2 = "🟢" if stats2['period_change'] > 0 else "🔴"
+            st.metric(f"{label2} - Variação", f"{stats2['period_change']:+.2f}%", f"{change_color2}")
+
+    # Volatility and risk metrics
+    with st.container(border=True):
+        st.markdown("**Volatilidade e Risco**")
+        col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+
+        with col_b1:
+            st.metric(f"{label1} - Vol. Período", f"{stats1['vol_period']:.1f}%",
+                     help="Volatilidade do período selecionado")
+        with col_b2:
+            st.metric(f"{label1} - Vol. Anual", f"{stats1['vol_annual']:.1f}%",
+                     help="Volatilidade anualizada (252 dias)")
+        with col_b3:
+            st.metric(f"{label2} - Vol. Período", f"{stats2['vol_period']:.1f}%",
+                     help="Volatilidade do período selecionado")
+        with col_b4:
+            st.metric(f"{label2} - Vol. Anual", f"{stats2['vol_annual']:.1f}%",
+                     help="Volatilidade anualizada (252 dias)")
+
+    # Trading signals
+    with st.container(border=True):
+        st.markdown("**Sinais de Trading**")
+        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+
+        with col_c1:
+            z1_interp = "Caro" if stats1['z_score'] > 1.5 else "Barato" if stats1['z_score'] < -1.5 else "Justo"
+            z1_color = "🔴" if stats1['z_score'] > 1.5 else "🟢" if stats1['z_score'] < -1.5 else "🟡"
+            st.metric(f"{label1} - Z-Score", f"{stats1['z_score']:.2f}", f"{z1_color} {z1_interp}",
+                     help="Distância da média em desvios padrão")
+
+        with col_c2:
+            sharpe1_color = "🟢" if stats1['sharpe'] > 1 else "🟡" if stats1['sharpe'] > 0 else "🔴"
+            st.metric(f"{label1} - Sharpe", f"{stats1['sharpe']:.2f}", f"{sharpe1_color}",
+                     help="Retorno ajustado ao risco")
+
+        with col_c3:
+            z2_interp = "Caro" if stats2['z_score'] > 1.5 else "Barato" if stats2['z_score'] < -1.5 else "Justo"
+            z2_color = "🔴" if stats2['z_score'] > 1.5 else "🟢" if stats2['z_score'] < -1.5 else "🟡"
+            st.metric(f"{label2} - Z-Score", f"{stats2['z_score']:.2f}", f"{z2_color} {z2_interp}",
+                     help="Distância da média em desvios padrão")
+
+        with col_c4:
+            sharpe2_color = "🟢" if stats2['sharpe'] > 1 else "🟡" if stats2['sharpe'] > 0 else "🔴"
+            st.metric(f"{label2} - Sharpe", f"{stats2['sharpe']:.2f}", f"{sharpe2_color}",
+                     help="Retorno ajustado ao risco")
+
+    # Max drawdown
+    with st.container(border=True):
+        st.markdown("**Drawdown e Posição**")
+        col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+
+        with col_d1:
+            dd1_color = "🟢" if stats1['max_drawdown'] > -10 else "🟡" if stats1['max_drawdown'] > -20 else "🔴"
+            st.metric(f"{label1} - Max DD", f"{stats1['max_drawdown']:.1f}%", f"{dd1_color}",
+                     help="Maior queda do pico ao vale")
+
+        with col_d2:
+            dist1 = ((stats1['current'] - stats1['mean']) / stats1['mean'] * 100)
+            dist1_color = "↗️" if dist1 > 0 else "↘️"
+            st.metric(f"{label1} - vs Média", f"{dist1:+.1f}%", f"{dist1_color}",
+                     help="Distância percentual da média")
+
+        with col_d3:
+            dd2_color = "🟢" if stats2['max_drawdown'] > -10 else "🟡" if stats2['max_drawdown'] > -20 else "🔴"
+            st.metric(f"{label2} - Max DD", f"{stats2['max_drawdown']:.1f}%", f"{dd2_color}",
+                     help="Maior queda do pico ao vale")
+
+        with col_d4:
+            dist2 = ((stats2['current'] - stats2['mean']) / stats2['mean'] * 100)
+            dist2_color = "↗️" if dist2 > 0 else "↘️"
+            st.metric(f"{label2} - vs Média", f"{dist2:+.1f}%", f"{dist2_color}",
+                     help="Distância percentual da média")
 
 
 def export_data_to_csv(data, filename="data.csv"):
