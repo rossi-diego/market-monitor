@@ -1,9 +1,19 @@
+"""
+Virtual Page - Under Development
+Placeholder for future virtual trading features.
+"""
 import streamlit as st
+from src.utils import apply_theme
 
-base="dark"
-primaryColor="#7aa2f7"
-backgroundColor="#0E1117"
-secondaryBackgroundColor="#161a23"
-textColor="#e6e6e6"
+# Apply theme
+apply_theme()
 
-st.write("Em desenvolvimento")
+# Page content
+st.markdown("# 📊 Virtual")
+st.info("Esta página está em desenvolvimento.")
+st.markdown("""
+### Funcionalidades planejadas:
+- Simulação de operações
+- Análise de posições virtuais
+- Backtesting de estratégias
+""")
