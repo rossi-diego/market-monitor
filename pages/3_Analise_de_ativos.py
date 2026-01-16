@@ -439,7 +439,7 @@ def display_comparison_stats(data, col1, col2, label1, label2):
                      help="Distância percentual da média")
 
 
-def export_data_to_csv(data, filename="data.csv"):
+def export_data_to_csv(data, filename="data.csv", key_suffix=""):
     """Create CSV download button."""
     if data.empty:
         st.warning("Sem dados para exportar")
@@ -452,6 +452,7 @@ def export_data_to_csv(data, filename="data.csv"):
             data=csv,
             file_name=filename,
             mime="text/csv",
+            key=f"download_csv_{key_suffix}",
         )
     except Exception as e:
         st.error(f"Erro ao exportar CSV: {str(e)}")
@@ -763,7 +764,8 @@ def main():
         with col_exp1:
             export_data_to_csv(
                 df_view,
-                f"{asset_label.replace('/', '_')}_{start_date}_{end_date}.csv"
+                f"{asset_label.replace('/', '_')}_{start_date}_{end_date}.csv",
+                key_suffix="single_asset"
             )
 
         with col_exp2:
@@ -775,6 +777,7 @@ def main():
                     data=img_bytes,
                     file_name=f"{asset_label.replace('/', '_')}_chart.png",
                     mime="image/png",
+                    key="download_png_single",
                 )
 
     # ============================================================
@@ -886,7 +889,8 @@ def main():
         with col_exp1:
             export_data_to_csv(
                 df_view,
-                f"comparison_{asset_label}_{second_label}_{start_date}_{end_date}.csv".replace("/", "_")
+                f"comparison_{asset_label}_{second_label}_{start_date}_{end_date}.csv".replace("/", "_"),
+                key_suffix="comparison"
             )
 
         with col_exp2:
@@ -897,6 +901,7 @@ def main():
                     data=img_bytes,
                     file_name=f"comparison_{asset_label}_{second_label}.png".replace("/", "_"),
                     mime="image/png",
+                    key="download_png_comparison",
                 )
 
 
