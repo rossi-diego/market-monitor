@@ -272,6 +272,9 @@ st.divider()
 # ============================================================
 df_ml = BASE_RANGE[["date", target_col] + feature_cols].copy()
 
+# Ensure date column is datetime type
+df_ml["date"] = pd.to_datetime(df_ml["date"], errors="coerce")
+
 # Generate lag columns (on target)
 for lag in range(1, num_lags + 1):
     df_ml[f"{target_col}_lag{lag}"] = df_ml[target_col].shift(lag)
@@ -752,10 +755,15 @@ st.markdown(f"### 🔮 Previsão Futura ({horizon} dias)")
 try:
     # Usamos a última linha disponível (com lags já preenchidos) como ponto de partida
     last_row = df_ml.iloc[-1:].copy()
-    last_date = df_ml["date"].iloc[-1]
+    
+    # Ensure date is Timestamp type
+    last_date = pd.Timestamp(df_ml["date"].iloc[-1])
+    
+    # Create future dates starting from the day after last date
     future_dates = pd.date_range(
         start=last_date + pd.Timedelta(days=1),
         periods=horizon,
+        freq='D'
     )
 
     forecast_values = []
@@ -786,16 +794,16 @@ try:
             current_row[f"{target_col}_lag1"] = next_pred
         # As outras features (externas) permanecem constantes com o último valor conhecido.
 
-    forecast_values = np.array(forecast_values)
+    forecast_values = np.array(forecast_values, dtype=float)
 
     # Calculate adaptive confidence interval (increases with forecast horizon)
-    forecast_std = residuals.std()
-    forecast_steps = np.arange(1, horizon + 1)
+    forecast_std = float(residuals.std())
+    forecast_steps = np.arange(1, horizon + 1, dtype=float)
     
     # Uncertainty grows with horizon: std * (1 + 0.05 * step)
     uncertainty_multiplier = 1.0 + (0.05 * forecast_steps)
-    upper_bound = forecast_values + 1.96 * forecast_std * uncertainty_multiplier
-    lower_bound = forecast_values - 1.96 * forecast_std * uncertainty_multiplier
+    upper_bound = forecast_values + (1.96 * forecast_std * uncertainty_multiplier)
+    lower_bound = forecast_values - (1.96 * forecast_std * uncertainty_multiplier)
 
     # Combined chart: Historical (last 60 days) + Forecast
     last_60_days = min(60, len(df_ml))
