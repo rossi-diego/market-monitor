@@ -133,16 +133,53 @@ with st.container(border=True):
         )
 
     with col2:
+        # Calculate correlation with target to suggest best features
+        default_features = []
+        if target_col:
+            correlations = {}
+            for col in valid_cols:
+                if col != target_col:
+                    try:
+                        # Calculate correlation
+                        corr_data = BASE[[target_col, col]].dropna()
+                        if len(corr_data) > 10:
+                            corr = corr_data.corr().iloc[0, 1]
+                            correlations[col] = abs(corr)
+                    except:
+                        pass
+
+            # Get top 5 features by correlation
+            if correlations:
+                sorted_features = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
+                default_features = [feat[0] for feat in sorted_features[:5]]
+
+        # If no correlations found, use first 3
+        if not default_features:
+            default_features = [c for c in valid_cols if c != target_col][:3]
+
         feature_cols = st.multiselect(
             "Features (variáveis explicativas)",
             options=valid_cols,
-            default=[c for c in valid_cols if c != target_col][:3],
-            help="Variáveis que o modelo usará para fazer previsões"
+            default=default_features,
+            help="💡 As 5 features mais correlacionadas com o target são selecionadas por padrão"
         )
+
+        # Show correlation info
+        if feature_cols and target_col and correlations:
+            with st.expander(f"📊 Correlação das Features com {target_col}", expanded=False):
+                # Show correlations for selected features
+                selected_corrs = [(f, correlations.get(f, 0)) for f in feature_cols if f in correlations]
+                selected_corrs.sort(key=lambda x: x[1], reverse=True)
+
+                st.markdown("**Top 5 Features Mais Correlacionadas:**")
+                for i, (feat, corr) in enumerate(selected_corrs[:5], 1):
+                    corr_strength = "Forte" if corr > 0.7 else "Moderada" if corr > 0.4 else "Fraca"
+                    corr_color = "🟢" if corr > 0.7 else "🟡" if corr > 0.4 else "🔴"
+                    st.caption(f"{i}. **{feat}**: {corr:.3f} {corr_color} ({corr_strength})")
 
     # At least 1 feature or lag must exist
     if len(feature_cols) == 0:
-        st.warning("⚠️ Selecione ao menos uma feature ou configure lags abaixo.")
+        st.info("💡 Dica: Selecione features ou configure lags abaixo para treinar o modelo.")
 
 # Container 2: Model Configuration
 with st.container(border=True):
@@ -204,15 +241,15 @@ with st.container(border=True):
         num_lags = st.slider(
             "Número de lags",
             min_value=0,
-            max_value=10,
-            value=5,
+            max_value=3,
+            value=0,
             step=1,
             help="Valores históricos do target: lag1=ontem, lag2=anteontem, etc."
         )
         if num_lags > 0:
             st.caption(f"✓ Usando {num_lags} valores históricos")
         else:
-            st.caption("⚠️ Sem lags - apenas features externas")
+            st.caption("✓ Apenas features externas")
 
     with col_horizon:
         horizon = st.slider(
@@ -554,171 +591,91 @@ else:
 st.divider()
 
 # ============================================================
-# Residual Analysis (Diagnostic Charts)
+# Residual Analysis (Simplified)
 # ============================================================
-st.markdown("### 🔍 Análise de Resíduos (Diagnósticos do Modelo)")
-
-# Calculate residuals from test set
-residuals = y_test_true.values - pred_test
-
-# Create diagnostic plots
-fig_residuals = go.Figure()
-
-# Residuals line
-fig_residuals.add_trace(
-    go.Scatter(
-        x=dates_test,
-        y=residuals,
-        mode="lines",
-        name="Resíduos",
-        line=dict(color="steelblue", width=1.5),
-        fill="tozeroy",
-        fillcolor="rgba(70, 130, 180, 0.3)"
-    )
-)
-
-# Residuals as markers for detail
-fig_residuals.add_trace(
-    go.Scatter(
-        x=dates_test,
-        y=residuals,
-        mode="markers",
-        name="Pontos",
-        marker=dict(
-            size=5,
-            color=residuals,
-            colorscale='RdBu_r',
-            showscale=True,
-            colorbar=dict(title="Erro", thickness=20, len=0.7),
-            line=dict(width=0.5, color='white')
-        ),
-        text=[f"Erro: {r:.2f}" for r in residuals],
-        hovertemplate="<b>%{text}</b><extra></extra>"
-    )
-)
-
-# Add zero line
-fig_residuals.add_hline(y=0, line_dash="dash", line_color="red", line_width=2, annotation_text="Sem Viés")
-
-# Add confidence bands (±1σ e ±2σ)
-fig_residuals.add_hline(y=residuals.std(), line_dash="dot", line_color="orange", line_width=1, annotation_text="+1σ")
-fig_residuals.add_hline(y=-residuals.std(), line_dash="dot", line_color="orange", line_width=1)
-fig_residuals.add_hline(y=2*residuals.std(), line_dash="dot", line_color="lightcoral", line_width=1, annotation_text="+2σ")
-fig_residuals.add_hline(y=-2*residuals.std(), line_dash="dot", line_color="lightcoral", line_width=1)
-
-fig_residuals.update_layout(
-    title="Resíduos ao Longo do Tempo (com bandas de confiança)",
-    xaxis_title="Data",
-    yaxis_title="Erro (Real - Previsto)",
-    height=500,
-    hovermode='x unified',
-)
-
-col_res_1, col_res_2 = st.columns([2, 1])
-
-with col_res_1:
-    st.plotly_chart(fig_residuals, use_container_width=True)
-
-with col_res_2:
-    st.markdown("**Estatísticas de Resíduos**")
-    st.metric("Média", f"{residuals.mean():.4f}", help="Deveria ser ~0 (modelo sem viés)")
-    st.metric("Std Dev", f"{residuals.std():.2f}", help="Variabilidade dos erros")
-    st.metric("Mínimo", f"{residuals.min():.2f}")
-    st.metric("Máximo", f"{residuals.max():.2f}")
-    st.metric("Maior erro (abs)", f"{np.abs(residuals).max():.2f}")
-
-# Distribution of residuals - Professional histogram
-fig_dist = go.Figure()
-
-# Histogram
-fig_dist.add_trace(
-    go.Histogram(
-        x=residuals,
-        nbinsx=max(15, int(np.sqrt(len(residuals)))),
-        name="Distribuição de Erros",
-        marker=dict(
-            color='steelblue',
-            line=dict(color='darkblue', width=1),
-            opacity=0.7
-        ),
-        opacity=0.7
-    )
-)
-
-# Add normal distribution curve overlay
-mu, sigma = residuals.mean(), residuals.std()
-x = np.linspace(residuals.min() - sigma, residuals.max() + sigma, 200)
-y_normal = stats.norm.pdf(x, mu, sigma)
-
-# Scale to match histogram
-histogram_bin_width = (residuals.max() - residuals.min()) / max(15, int(np.sqrt(len(residuals))))
-y_scaled = y_normal * len(residuals) * histogram_bin_width
-
-fig_dist.add_trace(
-    go.Scatter(
-        x=x,
-        y=y_scaled,
-        mode='lines',
-        name='Distribuição Normal Teórica',
-        line=dict(color='red', width=3),
-        hovertemplate="<b>Erro: %{x:.2f}</b><br>Densidade: %{y:.4f}<extra></extra>"
-    )
-)
-
-# Add vertical line at mean
-fig_dist.add_vline(
-    x=mu,
-    line_dash="dash",
-    line_color="green",
-    line_width=2,
-    annotation_text=f"Média: {mu:.4f}",
-    annotation_position="top right"
-)
-
-fig_dist.update_layout(
-    title=f"Distribuição dos Resíduos (μ={mu:.4f}, σ={sigma:.2f})",
-    xaxis_title="Erro (Real - Previsto)",
-    yaxis_title="Frequência",
-    height=500,
-    showlegend=True,
-    template="plotly_dark",
-    hovermode='x unified',
-    barmode='overlay'
-)
-
-st.plotly_chart(fig_dist, use_container_width=True)
-
-# Q-Q Plot concept explanation
-with st.expander("📊 Entender os Diagnósticos de Resíduos"):
+with st.expander("🔍 Análise de Resíduos (Diagnósticos do Modelo)", expanded=False):
     st.markdown("""
-    ### 🔍 O que significam os Resíduos?
+    ### 📊 O que são Resíduos?
 
     **Resíduos = Valor Real - Previsão**
-    - Residual positivo: modelo subestimou (previu menos que a realidade)
-    - Residual negativo: modelo superestimou (previu mais que a realidade)
-    - Resíduos próximos de 0: bom ajuste
-
-    ### ✅ Sinais de um Bom Modelo:
-
-    1. **Resíduos centrados em zero**: Média dos resíduos ~0 (sem viés)
-    2. **Resíduos normalmente distribuídos**: Formam distribuição de sino
-    3. **Resíduos aleatórios**: Sem padrão ou tendência
-    4. **Variância constante (homocedasticidade)**: Erros similares em todo período
-
-    ### ⚠️ Sinais de Problema:
-
-    - **Média longe de zero**: Modelo tendencioso (sempre super/subestima)
-    - **Distribuição enviesada**: Modelo não captura certos padrões
-    - **Padrão nos resíduos**: Tendência, sazonalidade não capturada
-    - **Variância crescente**: Erros aumentam com o tempo ou com magnitude do target
-
-    ### 🎯 O que Fazer:
-
-    - Se há viés (média ≠ 0): Ajuste o modelo ou adicione features
-    - Se há padrão: Adicione mais lags ou features explicativas
-    - Se há outliers: Considere robustness ou remover/tratar outliers
-    - Se não-normal: Pode usar modelos que não assumem normalidade
+    - **Positivo**: Modelo subestimou (previu menos)
+    - **Negativo**: Modelo superestimou (previu mais)
+    - **Próximo de 0**: Previsão precisa
     """)
+
+    # Calculate residuals from test set
+    residuals = y_test_true.values - pred_test
+
+    # Simple residual statistics
+    col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+
+    with col_r1:
+        res_mean = residuals.mean()
+        mean_color = "🟢" if abs(res_mean) < 1 else "🟡" if abs(res_mean) < 3 else "🔴"
+        st.metric("Viés Médio", f"{res_mean:.2f}", f"{mean_color}",
+                 help="Deveria ser ~0. Se positivo, modelo subestima. Se negativo, superestima.")
+
+    with col_r2:
+        res_std = residuals.std()
+        st.metric("Desvio Padrão", f"{res_std:.2f}",
+                 help="Variabilidade dos erros. Menor é melhor.")
+
+    with col_r3:
+        max_error = np.abs(residuals).max()
+        st.metric("Maior Erro", f"{max_error:.2f}",
+                 help="Pior previsão observada")
+
+    with col_r4:
+        # Percentage of errors within 1 std
+        within_1std = (np.abs(residuals) <= res_std).sum() / len(residuals) * 100
+        st.metric("Dentro de 1σ", f"{within_1std:.0f}%",
+                 help="% de erros dentro de 1 desvio padrão (~68% é normal)")
+
+    # Simple residual plot
+    fig_residuals = go.Figure()
+
+    fig_residuals.add_trace(
+        go.Scatter(
+            x=dates_test,
+            y=residuals,
+            mode="markers",
+            name="Erros",
+            marker=dict(
+                size=6,
+                color=residuals,
+                colorscale='RdYlGn_r',  # Red for positive errors, green for negative
+                showscale=True,
+                colorbar=dict(title="Erro"),
+                line=dict(width=0.5, color='white')
+            ),
+            hovertemplate="<b>Data:</b> %{x}<br><b>Erro:</b> %{y:.2f}<extra></extra>"
+        )
+    )
+
+    # Add zero line
+    fig_residuals.add_hline(y=0, line_dash="dash", line_color="gray", line_width=2)
+
+    fig_residuals.update_layout(
+        title="Erros do Modelo ao Longo do Tempo",
+        xaxis_title="Data",
+        yaxis_title="Erro (Real - Previsto)",
+        height=400,
+        hovermode='x unified',
+    )
+
+    st.plotly_chart(fig_residuals, use_container_width=True)
+
+    # Interpretation
+    st.markdown("### ✅ Como Interpretar")
+
+    if abs(res_mean) < 1 and within_1std > 60:
+        st.success("✅ **Modelo equilibrado**: Erros pequenos e bem distribuídos!")
+    elif abs(res_mean) > 3:
+        st.warning(f"⚠️ **Viés detectado**: Modelo tende a {'subestimar' if res_mean > 0 else 'superestimar'}. Considere ajustar features.")
+    elif within_1std < 50:
+        st.warning("⚠️ **Erros dispersos**: Muitos erros grandes. Considere adicionar mais features ou lags.")
+    else:
+        st.info("ℹ️ **Modelo aceitável**: Alguns erros, mas razoável para previsões.")
 
 st.divider()
 
@@ -801,16 +758,15 @@ st.markdown(f"### 🔮 Previsão Futura ({horizon} dias)")
 try:
     # Usamos a última linha disponível (com lags já preenchidos) como ponto de partida
     last_row = df_ml.iloc[-1:].copy()
-    
-    # Ensure date is Timestamp type
-    last_date = pd.Timestamp(df_ml["date"].iloc[-1])
-    
+
+    # Ensure date is Timestamp type and handle properly
+    last_date = pd.to_datetime(df_ml["date"].iloc[-1])
+
     # Create future dates starting from the day after last date
-    future_dates = pd.date_range(
-        start=last_date + pd.Timedelta(days=1),
-        periods=horizon,
-        freq='D'
-    )
+    # Use timedelta properly to avoid the error
+    future_dates = pd.DatetimeIndex([
+        last_date + pd.Timedelta(days=i) for i in range(1, horizon + 1)
+    ])
 
     forecast_values = []
 
@@ -988,23 +944,25 @@ st.markdown("### 📥 Exportar Resultados")
 col_exp1, col_exp2 = st.columns(2)
 
 with col_exp1:
-    # Export forecast to CSV
-    forecast_df = pd.DataFrame({
-        'Data': future_dates,
-        'Previsão': forecast_values,
-        'IC_Superior_95': upper_bound,
-        'IC_Inferior_95': lower_bound
-    })
-    forecast_df['Data'] = forecast_df['Data'].dt.strftime('%Y-%m-%d')  # Format dates properly
+    try:
+        # Export forecast to CSV
+        forecast_df = pd.DataFrame({
+            'Data': [d.strftime('%Y-%m-%d') for d in future_dates],
+            'Previsão': forecast_values,
+            'IC_Superior_95': upper_bound,
+            'IC_Inferior_95': lower_bound
+        })
 
-    csv_forecast = forecast_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        "📥 Baixar Previsões (CSV)",
-        data=csv_forecast,
-        file_name=f"previsao_{target_col}_{horizon}dias_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv",
-        key="download_forecast_csv",
-    )
+        csv_forecast = forecast_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "📥 Baixar Previsões (CSV)",
+            data=csv_forecast,
+            file_name=f"previsao_{target_col}_{horizon}dias_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            key="download_forecast_csv",
+        )
+    except Exception as e:
+        st.warning(f"⚠️ Erro ao exportar previsões: {str(e)}")
 
 with col_exp2:
     # Export model metrics to CSV
