@@ -345,8 +345,17 @@ y_scaler = None
 
 if normalize:
     x_scaler = StandardScaler()
-    X_train = x_scaler.fit_transform(X_train_raw)
-    X_test = x_scaler.transform(X_test_raw)
+    # Keep as DataFrame to preserve column names
+    X_train = pd.DataFrame(
+        x_scaler.fit_transform(X_train_raw),
+        columns=X_train_raw.columns,
+        index=X_train_raw.index
+    )
+    X_test = pd.DataFrame(
+        x_scaler.transform(X_test_raw),
+        columns=X_test_raw.columns,
+        index=X_test_raw.index
+    )
 
     y_scaler = StandardScaler()
     y_train_scaled = y_scaler.fit_transform(
@@ -732,29 +741,29 @@ try:
     last_row = df_ml.iloc[-1:].copy()
     last_date = pd.to_datetime(df_ml["date"].iloc[-1])
 
-    # Create future dates properly
-    future_dates = pd.DatetimeIndex([
-        last_date + pd.Timedelta(days=i) for i in range(1, horizon + 1)
-    ])
+    # Create future dates properly - use a list of Timestamps
+    future_dates = [last_date + pd.Timedelta(days=i) for i in range(1, horizon + 1)]
+    future_dates = pd.DatetimeIndex(future_dates)
 
     forecast_values = []
 
-    # Convert to Series for easier manipulation
-    current_row = last_row.drop(columns=["date", target_col]).copy().iloc[0]
+    # Convert to DataFrame for easier manipulation (preserve column names)
+    current_row_df = last_row.drop(columns=["date", target_col]).copy()
 
     # Multi-step forecasting
     for step in range(horizon):
-        # Reshape for model prediction
-        current_row_2d = current_row.values.reshape(1, -1)
-
         if normalize and x_scaler is not None and y_scaler is not None:
-            current_x = x_scaler.transform(current_row_2d)
-            next_pred_scaled = model.predict(current_x)[0]
+            # Transform using DataFrame to preserve column names
+            current_x_scaled = pd.DataFrame(
+                x_scaler.transform(current_row_df),
+                columns=current_row_df.columns
+            )
+            next_pred_scaled = model.predict(current_x_scaled)[0]
             next_pred = float(y_scaler.inverse_transform(
                 np.array([[next_pred_scaled]])
             )[0, 0])
         else:
-            next_pred = float(model.predict(current_row_2d)[0])
+            next_pred = float(model.predict(current_row_df)[0])
 
         forecast_values.append(next_pred)
 
@@ -763,9 +772,9 @@ try:
             for i in range(num_lags, 1, -1):
                 lag_col = f"{target_col}_lag{i}"
                 prev_lag_col = f"{target_col}_lag{i-1}"
-                if lag_col in current_row.index and prev_lag_col in current_row.index:
-                    current_row[lag_col] = current_row[prev_lag_col]
-            current_row[f"{target_col}_lag1"] = next_pred
+                if lag_col in current_row_df.columns and prev_lag_col in current_row_df.columns:
+                    current_row_df[lag_col] = current_row_df[prev_lag_col].values
+            current_row_df[f"{target_col}_lag1"] = next_pred
 
     forecast_values = np.array(forecast_values, dtype=float)
 
