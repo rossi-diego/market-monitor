@@ -36,24 +36,81 @@ apply_theme()
 # Configuration
 # ============================================================
 ASSETS_MAP = {
+    # Flats (calculated)
     "Flat do óleo de soja (BRL - C1)": "oleo_flat_brl",
     "Flat do óleo de soja (USD - C1)": "oleo_flat_usd",
     "Flat do farelo de soja (BRL - C1)": "farelo_flat_brl",
     "Flat do farelo de soja (USD - C1)": "farelo_flat_usd",
+
+    # Soy Complex
     "Óleo de soja (BOC1)": "boc1",
     "Farelo de soja (SMC1)": "smc1",
+    "Soja (SC1)": "sc1",
+
+    # Soy Premiums C1
     "Óleo - Prêmio C1": "so-premp-c1",
     "Farelo - Prêmio C1": "sm-premp-c1",
-    "Soja (SC1)": "sc1",
+    "Soja - Prêmio C1": "sb-premp-c1",
+
+    # Soy Regional Prices
+    "Soybean Oil Brazil Paranagua A1": "bo-brzpar-a1",
+    "Soybean Oil Brazil Paranagua B1": "bo-brzpar-b1",
+    "Soybean Brazil Paranagua A1": "s-brzpar-a1",
+    "Soybean Brazil Paranagua B1": "s-brzpar-b1",
+    "Soybean Meal Brazil Paranagua A1": "sm-brzpar-a1",
+    "Soybean Meal Brazil Paranagua B1": "sm-brzpar-b1",
+    "Soybean Oil Lib C1": "sb-oilib-c1",
+    "Soybean Argentina Ref": "soy-arg-ref",
+
+    # Grains
     "Milho (CC1)": "cc1",
-    "RIN D4": "rin-d4-us",
+    "Wheat (WC1)": "wc1",
+    "Kansas Wheat (KWC1)": "kwc1",
+    "Rice (RBC1)": "rbc1",
+
+    # Oils & Fats
     "Óleo de palma (FCPOC1)": "fcpoc1",
+    "Palm Oil Malaysia Crude (P1)": "palm-mycrd-p1",
+    "Palm Oil Malaysia RBD (P1)": "palm-myrbd-p1",
+    "Palm Oil SEA (OCRDM)": "palm-sea-ocrdm",
+    "CPO Indonesia (M1)": "cpo-id-m1",
+    "CPO Malaysia South (M1)": "cpo-mysth-m1",
+    "Soybean Oil SEA (DGCF)": "soil-sea-dgcf",
+    "Sunflower Oil SEA (CRM)": "sunf-sea-crm",
+    "Canola (RSC1)": "rsc1",
+
+    # Energy
     "Brent (LCOC1)": "lcoc1",
+    "WTI Crude Oil (CLC1)": "clc1",
     "Heating Oil (HOC1)": "hoc1",
-    "Dólar": "brl=",
-    "Bitcoin": "btc=",
-    "Gold": "gcc1",
-    "Silver": "sagc1",
+    "Fuel Oil (FUPOC1)": "fupoc1",
+    "Natural Gas (NGC1)": "ngc1",
+
+    # Softs
+    "Coffee (KCC1)": "kcc1",
+    "Cotton (CTC1)": "ctc1",
+    "Sugar (SBC1)": "sbc1",
+    "Orange Juice (OJC1)": "ojc1",
+    "Cocoa (CCC1)": "ccc1",
+
+    # Livestock
+    "Cattle (LCC1)": "lcc1",
+    "Lean Hogs (LHC1)": "lhc1",
+    "Feeder Cattle (FCC1)": "fcc1",
+
+    # Metals
+    "Gold (GCC1)": "gcc1",
+    "Silver (SIC1)": "sic1",
+    "Copper (HGC1)": "hgc1",
+    "Platinum (PLC1)": "plc1",
+    "Palladium (PAC1)": "pac1",
+
+    # Currencies
+    "Dólar (BRL=)": "brl=",
+    "Malaysian Ringgit (MYR=)": "myr=",
+
+    # Crypto
+    "Bitcoin (BTC=)": "btc=",
 }
 
 # ============================================================
