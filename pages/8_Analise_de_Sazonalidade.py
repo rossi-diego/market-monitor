@@ -68,27 +68,37 @@ def parse_year(year_str: str) -> int:
     Parse year from contract string.
 
     Rules:
-    - Single digit 0-9: 2010-2019 (ex: '6' = 2016, '9' = 2019)
+    - Format: DIGIT(S) + OPTIONAL(^1 or ^2)
+    - Single digit (0-9): 2020-2029 if has ^2, else 2010-2019 if has ^1
     - Two+ digits: 2000 + value (ex: '24' = 2024, '25' = 2025)
 
-    Note: Handles '^1' and '^2' suffixes by extracting numeric part
     Examples:
-        '6^1' -> 2016
-        '7^1' -> 2017
-        '24^2' -> 2024
+        '6^1' -> 2016 (decade marker ^1 = 2010s)
+        '0^2' -> 2020 (decade marker ^2 = 2020s)
+        '24' or '24^2' -> 2024
         '26' -> 2026
     """
     if not year_str:
         return None
 
     try:
-        # Remove '^1' or '^2' suffix if present
-        clean_year = year_str.replace('^1', '').replace('^2', '')
+        # Check for decade marker
+        has_marker_1 = '^1' in year_str
+        has_marker_2 = '^2' in year_str
+
+        # Extract numeric part only
+        clean_year = year_str.split('^')[0]
         val = int(clean_year)
 
         if len(clean_year) == 1:
-            # Single digit: 2010-2019
-            return 2010 + val
+            # Single digit: determine decade by marker
+            if has_marker_1:
+                return 2010 + val  # ^1 = 2010s (2016, 2017, etc.)
+            elif has_marker_2:
+                return 2020 + val  # ^2 = 2020s (2020, 2021, 2022, 2023)
+            else:
+                # No marker: assume 2020s for 0-3, 2010s for 4-9 (legacy logic)
+                return 2020 + val if val <= 3 else 2010 + val
         else:
             # Two+ digits: add 2000
             return 2000 + val
