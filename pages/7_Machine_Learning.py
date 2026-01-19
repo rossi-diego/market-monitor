@@ -53,6 +53,16 @@ except ImportError:
 
 from sklearn.ensemble import AdaBoostRegressor, ExtraTreesRegressor
 
+# Deep Learning models
+try:
+    import tensorflow as tf
+    from tensorflow import keras
+    from tensorflow.keras import layers, Sequential
+    from tensorflow.keras.callbacks import EarlyStopping
+    HAS_TENSORFLOW = True
+except ImportError:
+    HAS_TENSORFLOW = False
+
 from src.data_pipeline import df
 from src.utils import apply_theme, date_range_picker
 from src.asset_config import ASSETS_MAP, categorized_asset_picker
@@ -126,6 +136,167 @@ def calculate_feature_importance_score(df, target_col, feature_cols):
 
     return scores
 
+
+# ============================================================
+# Deep Learning Model Builders
+# ============================================================
+def build_lstm_model(n_features, n_timesteps=10, epochs=50, batch_size=32):
+    """
+    Build LSTM model for time series forecasting.
+
+    Args:
+        n_features: Number of input features
+        n_timesteps: Number of timesteps to look back
+        epochs: Training epochs
+        batch_size: Batch size for training
+
+    Returns:
+        Compiled Keras model
+    """
+    if not HAS_TENSORFLOW:
+        return None
+
+    model = Sequential([
+        layers.LSTM(64, activation='relu', return_sequences=True, input_shape=(n_timesteps, n_features)),
+        layers.Dropout(0.2),
+        layers.LSTM(32, activation='relu'),
+        layers.Dropout(0.2),
+        layers.Dense(16, activation='relu'),
+        layers.Dense(1)
+    ])
+
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    model.epochs = epochs
+    model.batch_size = batch_size
+    model.n_timesteps = n_timesteps
+
+    return model
+
+
+def build_gru_model(n_features, n_timesteps=10, epochs=50, batch_size=32):
+    """
+    Build GRU model (faster alternative to LSTM).
+
+    Args:
+        n_features: Number of input features
+        n_timesteps: Number of timesteps to look back
+        epochs: Training epochs
+        batch_size: Batch size for training
+
+    Returns:
+        Compiled Keras model
+    """
+    if not HAS_TENSORFLOW:
+        return None
+
+    model = Sequential([
+        layers.GRU(64, activation='relu', return_sequences=True, input_shape=(n_timesteps, n_features)),
+        layers.Dropout(0.2),
+        layers.GRU(32, activation='relu'),
+        layers.Dropout(0.2),
+        layers.Dense(16, activation='relu'),
+        layers.Dense(1)
+    ])
+
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    model.epochs = epochs
+    model.batch_size = batch_size
+    model.n_timesteps = n_timesteps
+
+    return model
+
+
+def build_cnn_model(n_features, n_timesteps=10, epochs=50, batch_size=32):
+    """
+    Build 1D CNN model for time series pattern recognition.
+
+    Args:
+        n_features: Number of input features
+        n_timesteps: Number of timesteps to look back
+        epochs: Training epochs
+        batch_size: Batch size for training
+
+    Returns:
+        Compiled Keras model
+    """
+    if not HAS_TENSORFLOW:
+        return None
+
+    model = Sequential([
+        layers.Conv1D(64, kernel_size=3, activation='relu', input_shape=(n_timesteps, n_features)),
+        layers.MaxPooling1D(pool_size=2),
+        layers.Conv1D(32, kernel_size=3, activation='relu'),
+        layers.Flatten(),
+        layers.Dense(16, activation='relu'),
+        layers.Dropout(0.2),
+        layers.Dense(1)
+    ])
+
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    model.epochs = epochs
+    model.batch_size = batch_size
+    model.n_timesteps = n_timesteps
+
+    return model
+
+
+def build_deep_mlp_model(n_features, epochs=100, batch_size=32):
+    """
+    Build deep MLP (Multi-Layer Perceptron) model.
+
+    Args:
+        n_features: Number of input features
+        epochs: Training epochs
+        batch_size: Batch size for training
+
+    Returns:
+        Compiled Keras model
+    """
+    if not HAS_TENSORFLOW:
+        return None
+
+    model = Sequential([
+        layers.Dense(128, activation='relu', input_shape=(n_features,)),
+        layers.Dropout(0.3),
+        layers.Dense(64, activation='relu'),
+        layers.Dropout(0.3),
+        layers.Dense(32, activation='relu'),
+        layers.Dropout(0.2),
+        layers.Dense(16, activation='relu'),
+        layers.Dense(1)
+    ])
+
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    model.epochs = epochs
+    model.batch_size = batch_size
+    model.n_timesteps = None  # MLP doesn't need reshaping
+
+    return model
+
+
+def reshape_for_rnn(X, n_timesteps):
+    """
+    Reshape data for RNN models (LSTM/GRU/CNN).
+
+    Args:
+        X: Input data (samples, features)
+        n_timesteps: Number of timesteps
+
+    Returns:
+        Reshaped data (samples, timesteps, features)
+    """
+    n_samples = X.shape[0]
+    n_features = X.shape[1] // n_timesteps
+
+    # Ensure we have enough features
+    if X.shape[1] % n_timesteps != 0:
+        # Trim features to fit timesteps
+        n_features = X.shape[1] // n_timesteps
+        X = X.iloc[:, :n_features * n_timesteps]
+
+    return X.values.reshape((n_samples, n_timesteps, n_features))
+
+
 # ============================================================
 # Explanation Expander
 # ============================================================
@@ -165,11 +336,19 @@ with st.expander("📘 Como funciona o modelo de Machine Learning?", expanded=Fa
 
     ### 🎯 Escolhendo o Modelo
 
+    **📊 Modelos Tradicionais (ML)**
     - **Ridge/Lasso/ElasticNet**: Rápidos, lineares, bons para relações simples
-    - **Random Forest**: Robusto, captura não-linearidades, menos overfitting
-    - **Gradient Boosting/XGBoost/LightGBM**: Máxima performance, padrões complexos
-    - **SVR**: Kernel-based, bom para dados de alta dimensão
-    - **Neural Network**: Máxima flexibilidade, requer mais dados
+    - **Random Forest/Extra Trees**: Robustos, capturam não-linearidades
+    - **Gradient Boosting/XGBoost/LightGBM/CatBoost**: Máxima performance, padrões complexos
+    - **AdaBoost**: Simples e eficaz, bom com weak learners
+
+    **🧠 Modelos de Deep Learning**
+    - **LSTM** (Long Short-Term Memory): Melhor para dependências de longo prazo, captura padrões temporais complexos
+    - **GRU** (Gated Recurrent Unit): Alternativa mais rápida ao LSTM, menos parâmetros, boa performance
+    - **1D CNN**: Detecção de padrões em janelas temporais, mais rápido que RNNs
+    - **Deep MLP**: Rede neural profunda, captura relações não-lineares complexas
+
+    ⚠️ **Nota**: Modelos de deep learning requerem TensorFlow instalado e mais dados para treinar efetivamente.
     """)
 
 st.divider()
@@ -229,7 +408,8 @@ with tab_config:
                 subsample=0.8,
                 colsample_bytree=0.8,
                 random_state=42,
-                verbosity=0
+                verbosity=0,
+                n_jobs=1  # Prevent threading issues
             )
 
         if HAS_LGBM:
@@ -252,13 +432,29 @@ with tab_config:
                 verbose=False
             )
 
+        # Deep Learning models (will be added after configuration is done)
+        # These need special parameters (epochs, timesteps) from Advanced tab
+        dl_models_pending = {}
+
+        if HAS_TENSORFLOW:
+            # Mark that DL models are available but not yet configured
+            dl_models_pending = {
+                "LSTM": "build_lstm",
+                "GRU": "build_gru",
+                "1D CNN": "build_cnn",
+                "Deep MLP": "build_deep_mlp"
+            }
+
         with col_model:
             if not comparison_mode:
+                # Include DL models in selection
+                all_model_names = list(models_dict.keys()) + list(dl_models_pending.keys())
+
                 model_label = st.selectbox(
                     "Algoritmo",
-                    list(models_dict.keys()),
+                    all_model_names,
                     index=0,
-                    help="Escolha o algoritmo de ML para treinar"
+                    help="Escolha o algoritmo de ML/DL para treinar"
                 )
 
                 # Model description
@@ -273,13 +469,19 @@ with tab_config:
                     "XGBoost": "✅ Estado da arte\n✅ Excelente performance\n✅ Rápido e eficiente",
                     "LightGBM": "✅ Mais rápido que XGBoost\n✅ Eficiente em memória\n✅ Ótima precisão",
                     "CatBoost": "✅ Melhor precisão\n✅ Robust a overfitting\n✅ Handles missing values",
+                    "LSTM": "🧠 Deep Learning\n✅ Captura dependências longas\n✅ Excelente para séries temporais\n⚠️ Requer mais dados e tempo",
+                    "GRU": "🧠 Deep Learning\n✅ Mais rápido que LSTM\n✅ Menos parâmetros\n✅ Boa performance geral",
+                    "1D CNN": "🧠 Deep Learning\n✅ Detecção de padrões\n✅ Mais rápido que RNNs\n✅ Bom para tendências locais",
+                    "Deep MLP": "🧠 Deep Learning\n✅ Captura relações complexas\n✅ Rede profunda\n⚠️ Não usa sequência temporal",
                 }
                 st.caption(model_descriptions.get(model_label, ""))
 
-                models_to_train = {model_label: models_dict[model_label]}
+                # Will be set later after DL configuration
+                models_to_train = {}
             else:
-                st.info(f"🔄 Modo de comparação ativado: Todos os {len(models_dict)} modelos serão treinados")
-                models_to_train = models_dict.copy()
+                st.info(f"🔄 Modo de comparação ativado: Todos os modelos serão treinados (ML + DL se disponível)")
+                # Will include DL models after configuration
+                models_to_train = {}
 
     with st.container(border=True):
         st.markdown("### 📅 Configurações Temporais")
@@ -499,6 +701,59 @@ with tab_advanced:
             )
             st.caption(f"✓ {train_split}% treino / {100-train_split}% teste")
 
+    # Deep Learning specific configuration
+    if HAS_TENSORFLOW and len(dl_models_pending) > 0:
+        with st.container(border=True):
+            st.markdown("### 🧠 Configurações de Deep Learning")
+
+            col_dl1, col_dl2, col_dl3 = st.columns(3)
+
+            with col_dl1:
+                dl_epochs = st.slider(
+                    "Epochs",
+                    min_value=10,
+                    max_value=200,
+                    value=50,
+                    step=10,
+                    help="Número de épocas de treinamento. Mais épocas = mais tempo mas melhor aprendizado"
+                )
+                st.caption(f"✓ {dl_epochs} iterações completas")
+
+            with col_dl2:
+                dl_batch_size = st.slider(
+                    "Batch Size",
+                    min_value=8,
+                    max_value=128,
+                    value=32,
+                    step=8,
+                    help="Tamanho do lote para atualização dos pesos"
+                )
+                st.caption(f"✓ {dl_batch_size} samples por batch")
+
+            with col_dl3:
+                dl_timesteps = st.slider(
+                    "Timesteps (RNN/CNN)",
+                    min_value=5,
+                    max_value=30,
+                    value=10,
+                    step=5,
+                    help="Janela temporal para LSTM/GRU/CNN (quantos passos anteriores usar)"
+                )
+                st.caption(f"✓ {dl_timesteps} passos de tempo")
+
+            st.info("""
+            ℹ️ **Dicas de configuração:**
+            - **Epochs**: Comece com 50. Aumente se o modelo ainda está melhorando.
+            - **Batch Size**: 32 é um bom padrão. Menor = mais preciso mas mais lento.
+            - **Timesteps**: 10-15 é ideal para séries diárias. Mais = captura padrões de longo prazo.
+            """)
+
+# Set default DL parameters if not configured
+if not HAS_TENSORFLOW or len(dl_models_pending) == 0:
+    dl_epochs = 50
+    dl_batch_size = 32
+    dl_timesteps = 10
+
 # Apply date range filter
 mask_model = (BASE["date"].dt.date >= start_model_date) & (BASE["date"].dt.date <= end_model_date)
 BASE_RANGE = BASE.loc[mask_model].copy()
@@ -515,6 +770,12 @@ if len(feature_cols) == 0 and num_lags == 0:
     st.stop()
 
 st.divider()
+
+# ============================================================
+# Build Deep Learning models now that we have configuration
+# ============================================================
+# This needs to happen AFTER feature configuration so we know n_features
+# We'll add them to models_dict after data preparation
 
 
 # ============================================================
@@ -568,6 +829,59 @@ with st.spinner("Preparando dados e aplicando engenharia de features..."):
     """)
 
 # ============================================================
+# Build Deep Learning Models (now that we know n_features)
+# ============================================================
+if HAS_TENSORFLOW and len(dl_models_pending) > 0:
+    n_features = len(feature_names)
+
+    # Calculate features per timestep for RNN models
+    n_features_per_timestep = max(1, n_features // dl_timesteps)
+
+    # Build DL models
+    if "LSTM" in dl_models_pending:
+        models_dict["LSTM"] = build_lstm_model(
+            n_features=n_features_per_timestep,
+            n_timesteps=dl_timesteps,
+            epochs=dl_epochs,
+            batch_size=dl_batch_size
+        )
+
+    if "GRU" in dl_models_pending:
+        models_dict["GRU"] = build_gru_model(
+            n_features=n_features_per_timestep,
+            n_timesteps=dl_timesteps,
+            epochs=dl_epochs,
+            batch_size=dl_batch_size
+        )
+
+    if "1D CNN" in dl_models_pending:
+        models_dict["1D CNN"] = build_cnn_model(
+            n_features=n_features_per_timestep,
+            n_timesteps=dl_timesteps,
+            epochs=dl_epochs,
+            batch_size=dl_batch_size
+        )
+
+    if "Deep MLP" in dl_models_pending:
+        models_dict["Deep MLP"] = build_deep_mlp_model(
+            n_features=n_features,
+            epochs=dl_epochs,
+            batch_size=dl_batch_size
+        )
+
+# Finalize models_to_train based on mode
+if not comparison_mode:
+    # Single model mode
+    if model_label in models_dict:
+        models_to_train = {model_label: models_dict[model_label]}
+    else:
+        st.error(f"❌ Modelo {model_label} não disponível. Verifique se as dependências estão instaladas.")
+        st.stop()
+else:
+    # Comparison mode - all available models
+    models_to_train = models_dict.copy()
+
+# ============================================================
 # Train Model(s)
 # ============================================================
 st.divider()
@@ -612,15 +926,85 @@ for idx, (model_name, model) in enumerate(models_to_train.items()):
     status_text.text(f"Treinando {model_name}... ({idx+1}/{len(models_to_train)})")
 
     try:
-        # Train model
-        model.fit(X_train, y_train)
+        # Check if it's a Keras model
+        is_keras_model = HAS_TENSORFLOW and hasattr(model, 'fit') and hasattr(model, 'epochs')
 
-        # Predict
-        if normalize and y_scaler is not None:
-            pred_test_scaled = model.predict(X_test)
-            pred_test = y_scaler.inverse_transform(pred_test_scaled.reshape(-1, 1)).ravel()
+        if is_keras_model:
+            # Deep Learning model - needs special handling
+            epochs = model.epochs
+            batch_size = model.batch_size
+            n_timesteps = model.n_timesteps
+
+            # Prepare data based on model type
+            if n_timesteps is not None:
+                # RNN models (LSTM, GRU, CNN) - need 3D reshaping
+                X_train_dl = reshape_for_rnn(X_train, n_timesteps)
+                X_test_dl = reshape_for_rnn(X_test, n_timesteps)
+            else:
+                # MLP - use 2D as is
+                X_train_dl = X_train.values
+                X_test_dl = X_test.values
+
+            # Train with early stopping
+            if HAS_TENSORFLOW:
+                early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+                model.fit(
+                    X_train_dl,
+                    y_train,
+                    epochs=epochs,
+                    batch_size=batch_size,
+                    verbose=0,
+                    callbacks=[early_stop],
+                    validation_split=0.1
+                )
+
+            # Predict
+            pred_test_scaled = model.predict(X_test_dl, verbose=0).ravel()
+
+            if normalize and y_scaler is not None:
+                pred_test = y_scaler.inverse_transform(pred_test_scaled.reshape(-1, 1)).ravel()
+            else:
+                pred_test = pred_test_scaled
+
+        elif model_name == "XGBoost" and HAS_XGB:
+            # XGBoost specific handling
+            model.fit(X_train, y_train, verbose=False)
+            # Predict
+            if normalize and y_scaler is not None:
+                pred_test_scaled = model.predict(X_test)
+                pred_test = y_scaler.inverse_transform(pred_test_scaled.reshape(-1, 1)).ravel()
+            else:
+                pred_test = model.predict(X_test)
+
+        elif model_name == "LightGBM" and HAS_LGBM:
+            # LightGBM specific handling
+            model.fit(X_train, y_train, verbose=False)
+            # Predict
+            if normalize and y_scaler is not None:
+                pred_test_scaled = model.predict(X_test)
+                pred_test = y_scaler.inverse_transform(pred_test_scaled.reshape(-1, 1)).ravel()
+            else:
+                pred_test = model.predict(X_test)
+
+        elif model_name == "CatBoost" and HAS_CATBOOST:
+            # CatBoost specific handling
+            model.fit(X_train, y_train, verbose=False)
+            # Predict
+            if normalize and y_scaler is not None:
+                pred_test_scaled = model.predict(X_test)
+                pred_test = y_scaler.inverse_transform(pred_test_scaled.reshape(-1, 1)).ravel()
+            else:
+                pred_test = model.predict(X_test)
+
         else:
-            pred_test = model.predict(X_test)
+            # Standard sklearn models
+            model.fit(X_train, y_train)
+            # Predict
+            if normalize and y_scaler is not None:
+                pred_test_scaled = model.predict(X_test)
+                pred_test = y_scaler.inverse_transform(pred_test_scaled.reshape(-1, 1)).ravel()
+            else:
+                pred_test = model.predict(X_test)
 
         # Store results
         trained_models[model_name] = model
@@ -651,7 +1035,13 @@ for idx, (model_name, model) in enumerate(models_to_train.items()):
         }
 
     except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
         st.warning(f"⚠️ Erro ao treinar {model_name}: {str(e)}")
+
+        # Show detailed error in expander for debugging
+        with st.expander(f"🔧 Detalhes do erro - {model_name}"):
+            st.code(error_detail)
         continue
 
     progress_bar.progress((idx + 1) / len(models_to_train))
