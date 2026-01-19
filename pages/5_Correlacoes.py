@@ -5,8 +5,9 @@ import pandas as pd
 import streamlit as st
 
 from src.data_pipeline import df
-from src.utils import apply_theme, section, available_assets, compute_corr, date_range_picker, vspace
+from src.utils import apply_theme, section, compute_corr, date_range_picker, vspace
 from src.visualization import plot_corr_heatmap
+from src.asset_config import ASSETS_MAP, get_available_assets
 
 # --- Theme
 apply_theme()
@@ -31,28 +32,9 @@ div[data-testid="stHorizontalBlock"] { gap: .75rem; }
 """, unsafe_allow_html=True)
 
 # ============================================================
-# Mapa de rótulos -> colunas (o usuário vê o rótulo)
+# Get available assets from shared configuration
 # ============================================================
-COL_MAP = {
-    "Flat do óleo de soja (BRL - C1)": "oleo_flat_brl",
-    "Flat do óleo de soja (USD - C1)": "oleo_flat_usd",
-    "Óleo de soja (BOC1)": "boc1",
-    "Flat do farelo de soja (BRL - C1)": "farelo_flat_brl",
-    "Flat do farelo de soja (USD - C1)": "farelo_flat_usd",
-    "Farelo de soja (SMC1)": "smc1",
-    "Óleo – Prêmio C1": "so-premp-c1",
-    "Farelo – Prêmio C1": "sm-premp-c1",
-    "Soja (SC1)": "sc1",
-    "Milho (CC1)": "cc1",
-    "RIN D4": "rin-d4-us",
-    "Óleo de palma (FCPOC1)": "fcpoc1",
-    "Brent (LCOC1)": "lcoc1",
-    "Heating Oil (HOC1)": "hoc1",
-    "Dólar": "brl=",
-}
-
-# Somente colunas existentes no df
-AVAILABLE = available_assets(df, COL_MAP)
+AVAILABLE = get_available_assets(df)
 
 # ============================================================
 # Parâmetros

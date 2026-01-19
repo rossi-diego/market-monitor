@@ -47,6 +47,7 @@ except ImportError:
 
 from src.data_pipeline import df
 from src.utils import apply_theme, date_range_picker
+from src.asset_config import ASSETS_MAP, categorized_asset_picker
 import plotly.graph_objects as go
 
 # Theme
@@ -63,6 +64,12 @@ st.divider()
 BASE = df.copy()
 BASE["date"] = pd.to_datetime(BASE["date"], errors="coerce")
 BASE = BASE.sort_values("date").reset_index(drop=True)
+
+# Filter to only continuation contracts (exclude monthly contracts)
+# Keep only columns that are in ASSETS_MAP (continuation contracts)
+valid_asset_cols = [col for col in BASE.columns if col in ASSETS_MAP.values()]
+valid_cols = ["date"] + valid_asset_cols
+BASE = BASE[valid_cols]
 
 # ============================================================
 # Explanation Expander
@@ -121,63 +128,76 @@ st.markdown("## ⚙️ Configuração do Modelo")
 with st.container(border=True):
     st.markdown("### 🎯 Dados de Entrada")
 
-    valid_cols = [c for c in BASE.columns if c not in ["date"] and BASE[c].dtype != "object"]
+    # Get valid columns (only continuation contracts)
+    valid_cols_raw = [c for c in BASE.columns if c not in ["date"] and BASE[c].dtype != "object"]
 
-    col1, col2 = st.columns([1, 2])
+    st.markdown("#### Ativo Target (a ser previsto)")
+    target_col, target_label = categorized_asset_picker(
+        BASE,
+        state_key="ml_target",
+        show_favorites=True,
+    )
 
-    with col1:
-        target_col = st.selectbox(
-            "Ativo a prever (Target)",
-            valid_cols,
-            index=0,
-            help="Variável que o modelo irá prever"
-        )
+    st.markdown("#### Features (variáveis explicativas)")
 
-    with col2:
-        # Calculate correlation with target to suggest best features
-        default_features = []
-        correlations = {}
+    # Calculate correlation with target to suggest best features
+    default_features = []
+    correlations = {}
 
-        if target_col:
-            for col in valid_cols:
-                if col != target_col:
-                    try:
-                        # Calculate absolute correlation
-                        corr_data = BASE[[target_col, col]].dropna()
-                        if len(corr_data) > 10:
-                            corr = corr_data.corr().iloc[0, 1]
-                            correlations[col] = abs(corr)
-                    except:
-                        pass
+    if target_col:
+        for col in valid_cols_raw:
+            if col != target_col:
+                try:
+                    # Calculate absolute correlation
+                    corr_data = BASE[[target_col, col]].dropna()
+                    if len(corr_data) > 10:
+                        corr = corr_data.corr().iloc[0, 1]
+                        correlations[col] = abs(corr)
+                except:
+                    pass
 
-            # Get top 5 features by correlation
-            if correlations:
-                sorted_features = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
-                default_features = [feat[0] for feat in sorted_features[:5]]
+        # Get top 5 features by correlation
+        if correlations:
+            sorted_features = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
+            default_features = [feat[0] for feat in sorted_features[:5]]
 
-        # If no correlations found, use first 3
-        if not default_features:
-            default_features = [c for c in valid_cols if c != target_col][:3]
+    # If no correlations found, use first 3
+    if not default_features:
+        default_features = [c for c in valid_cols_raw if c != target_col][:3]
 
-        feature_cols = st.multiselect(
-            "Features (variáveis explicativas)",
-            options=valid_cols,
-            default=default_features,
-            help="💡 As 5 features mais correlacionadas com o target são selecionadas por padrão"
-        )
+    # Create reverse map for labels
+    reverse_map = {col: label for label, col in ASSETS_MAP.items()}
 
-        # Show correlation info
-        if feature_cols and target_col and correlations:
-            with st.expander(f"📊 Correlação das Features com {target_col}", expanded=False):
-                # Show correlations for selected features
-                selected_corrs = [(f, correlations.get(f, 0)) for f in feature_cols if f in correlations]
-                selected_corrs.sort(key=lambda x: x[1], reverse=True)
+    # Get labels for features
+    feature_options_labels = [reverse_map.get(col, col) for col in valid_cols_raw if col != target_col]
+    feature_options_cols = [col for col in valid_cols_raw if col != target_col]
 
-                st.markdown("**Features Selecionadas (ordenadas por correlação):**")
-                for i, (feat, corr) in enumerate(selected_corrs, 1):
-                    corr_strength = "Forte" if corr > 0.7 else "Moderada" if corr > 0.4 else "Fraca"
-                    corr_color = "🟢" if corr > 0.7 else "🟡" if corr > 0.4 else "🔴"
-                    st.caption(f"{i}. **{feat}**: {corr:.3f} {corr_color} ({corr_strength})")
+    # Default features as labels
+    default_features_labels = [reverse_map.get(col, col) for col in default_features]
+
+    selected_features_labels = st.multiselect(
+        "Selecione as features",
+        options=feature_options_labels,
+        default=default_features_labels,
+        help="💡 As 5 features mais correlacionadas com o target são selecionadas por padrão"
+    )
+
+    # Convert labels back to columns
+    label_to_col = {label: col for col, label in reverse_map.items()}
+    feature_cols = [label_to_col.get(label, label) for label in selected_features_labels]
+
+    # Show correlation info
+    if feature_cols and target_col and correlations:
+        with st.expander(f"📊 Correlação das Features com {target_label}", expanded=False):
+            # Show correlations for selected features
+            selected_corrs = [(reverse_map.get(f, f), correlations.get(f, 0)) for f in feature_cols if f in correlations]
+            selected_corrs.sort(key=lambda x: x[1], reverse=True)
+
+            st.markdown("**Features Selecionadas (ordenadas por correlação):**")
+            for i, (feat_label, corr) in enumerate(selected_corrs, 1):
+                corr_strength = "Forte" if corr > 0.7 else "Moderada" if corr > 0.4 else "Fraca"
+                corr_color = "🟢" if corr > 0.7 else "🟡" if corr > 0.4 else "🔴"
+                st.caption(f"{i}. **{feat_label}**: {corr:.3f} {corr_color} ({corr_strength})")
 
     # At least 1 feature or lag must exist
     if len(feature_cols) == 0:
