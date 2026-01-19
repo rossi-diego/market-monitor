@@ -1,19 +1,19 @@
 # ============================================================
-# Seasonality Analysis - Commodity Futures
+# Análise de Sazonalidade - Padrões em Contratos Futuros
 # ============================================================
 """
-Professional seasonality analysis for commodity futures contracts.
-Generates actionable insights based on historical patterns.
+Análise profissional de sazonalidade em contratos futuros de commodities.
+Identifica padrões históricos e oportunidades de trading baseadas em estatísticas.
 """
 
+# ============================================================
+# Imports & Config
+# ============================================================
 import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
-from typing import Dict, List, Tuple, Optional
-from datetime import datetime
 
 try:
     from scipy import stats
@@ -21,954 +21,637 @@ try:
 except ImportError:
     HAS_SCIPY = False
 
-from src.utils import apply_theme
 from src.data_pipeline import df as BASE_DF
-
-# ============================================================
-# Configuration
-# ============================================================
-CONFIG = {
-    # Data source configuration
-    "data_source": "pipeline",  # "pipeline" or "csv"
-    "csv_path": "data/futures_data.csv",  # If using CSV
-
-    # Column names mapping (WIDE format)
-    "date_col": "date",
-
-    # Month code to number mapping (CME standard)
-    "month_code_map": {
-        'f': 1, 'g': 2, 'h': 3, 'j': 4, 'k': 5, 'm': 6,
-        'n': 7, 'q': 8, 'u': 9, 'v': 10, 'x': 11, 'z': 12
-    },
-
-    # Asset prefix mapping (order matters - check 'sm' before 's')
-    "asset_prefixes": [
-        ("sm", "Farelo de Soja"),
-        ("bo", "Óleo de Soja"),
-        ("s", "Soja"),
-        ("c", "Milho"),
-        ("w", "Trigo"),
-    ],
-
-    # Analysis parameters
-    "min_samples_per_bucket": 20,  # Minimum observations required per bucket
-    "rolling_window": 5,  # Rolling average window for smoothing
-    "hit_rate_threshold": 0.55,  # Threshold for "consistent" periods
-    "std_percentile_low": 40,  # Low volatility threshold (percentile)
-    "std_percentile_high": 75,  # High volatility threshold (percentile)
-    "top_n_periods": 5,  # Number of top/bottom periods to highlight
-}
+from src.utils import apply_theme, date_range_picker, section
+from src.asset_config import categorized_asset_picker
 
 # Apply theme
 apply_theme()
 
-# ============================================================
-# Data Parsing Functions
-# ============================================================
-def parse_year(year_str: str) -> Optional[int]:
-    """
-    Parse year from contract string.
-
-    Rules:
-    - Single digit 0-3: 2020-2023
-    - Single digit 4-9: 2014-2019
-    - Two+ digits: 2000 + value (e.g., 24 -> 2024)
-
-    Examples:
-        '6' -> 2016
-        '0' -> 2020
-        '24' -> 2024
-        '26' -> 2026
-    """
-    if not year_str:
-        return None
-
-    try:
-        val = int(year_str)
-        if len(year_str) == 1:
-            # Single digit
-            if 0 <= val <= 3:
-                return 2020 + val
-            elif 4 <= val <= 9:
-                return 2010 + val
-            else:
-                return None
-        else:
-            # Two or more digits
-            return 2000 + val
-    except:
-        return None
-
-
-def parse_contract_column(colname: str) -> Optional[Dict]:
-    """
-    Parse contract column name to extract asset, month_code, year.
-
-    Format: [prefix][month_letter][year_digits]
-    Examples:
-        'bok26' -> {asset: 'Óleo de Soja', prefix: 'bo', month_code: 'k', month_num: 5, year: 2026}
-        'smh25' -> {asset: 'Farelo de Soja', prefix: 'sm', month_code: 'h', month_num: 3, year: 2025}
-        'sh27' -> {asset: 'Soja', prefix: 's', month_code: 'h', month_num: 3, year: 2027}
-
-    Args:
-        colname: Column name to parse
-
-    Returns:
-        Dictionary with parsed information or None if invalid
-    """
-    colname_lower = colname.lower().strip()
-
-    # Try to match each asset prefix (order matters - check 'sm' before 's')
-    for prefix, asset_name in CONFIG["asset_prefixes"]:
-        if colname_lower.startswith(prefix):
-            # Extract month code and year after prefix
-            remainder = colname_lower[len(prefix):]
-
-            if len(remainder) < 2:
-                return None
-
-            month_code = remainder[0]
-            year_str = remainder[1:]
-
-            # Validate month code
-            if month_code not in CONFIG["month_code_map"]:
-                return None
-
-            # Parse year
-            year = parse_year(year_str)
-            if year is None:
-                return None
-
-            return {
-                'asset': asset_name,
-                'prefix': prefix,
-                'month_code': month_code.upper(),
-                'month_num': CONFIG["month_code_map"][month_code],
-                'year': year,
-                'contract_id': colname
-            }
-
-    return None
-
+# Page header
+st.markdown("# 📅 Análise de Sazonalidade")
+st.markdown("Identifique padrões sazonais históricos em contratos futuros e encontre oportunidades de trading baseadas em estatísticas")
+st.divider()
 
 # ============================================================
-# Data Loading Functions
-# ============================================================
-@st.cache_data(ttl=3600)
-def load_data_from_pipeline() -> pd.DataFrame:
-    """Load data from the existing data pipeline (WIDE format)."""
-    return BASE_DF.copy()
-
-
-@st.cache_data(ttl=3600)
-def load_data_from_csv(path: str) -> pd.DataFrame:
-    """Load data from CSV file (WIDE format)."""
-    try:
-        df = pd.read_csv(path)
-        return df
-    except Exception as e:
-        st.error(f"Error loading CSV: {str(e)}")
-        return pd.DataFrame()
-
-
-@st.cache_data
-def transform_wide_to_long(df_wide: pd.DataFrame) -> pd.DataFrame:
-    """
-    Transform WIDE format data to LONG format for seasonality analysis.
-
-    WIDE format: date | bok26 | smh25 | sh27 | ...
-    LONG format: date | contract_id | price | asset | month_code | year | ...
-
-    Args:
-        df_wide: Dataframe in wide format
-
-    Returns:
-        Dataframe in long format with contract metadata
-    """
-    date_col = CONFIG["date_col"]
-
-    if date_col not in df_wide.columns:
-        st.error(f"Date column '{date_col}' not found in data")
-        return pd.DataFrame()
-
-    # Identify contract columns
-    contract_cols = []
-    contract_metadata = {}
-
-    for col in df_wide.columns:
-        if col == date_col:
-            continue
-
-        parsed = parse_contract_column(col)
-        if parsed:
-            contract_cols.append(col)
-            contract_metadata[col] = parsed
-
-    if not contract_cols:
-        st.warning("No valid contract columns found in data")
-        return pd.DataFrame()
-
-    # Melt to long format
-    df_long = pd.melt(
-        df_wide,
-        id_vars=[date_col],
-        value_vars=contract_cols,
-        var_name='contract_id',
-        value_name='price'
-    )
-
-    # Drop NaN prices
-    df_long = df_long.dropna(subset=['price'])
-
-    # Add metadata columns
-    df_long['asset'] = df_long['contract_id'].map(lambda x: contract_metadata[x]['asset'])
-    df_long['prefix'] = df_long['contract_id'].map(lambda x: contract_metadata[x]['prefix'])
-    df_long['month_code'] = df_long['contract_id'].map(lambda x: contract_metadata[x]['month_code'])
-    df_long['month_num'] = df_long['contract_id'].map(lambda x: contract_metadata[x]['month_num'])
-    df_long['contract_year'] = df_long['contract_id'].map(lambda x: contract_metadata[x]['year'])
-
-    return df_long
-
-
-@st.cache_data
-def preprocess_data(
-    df_long: pd.DataFrame,
-    asset_filter: Optional[str] = None,
-    month_codes: Optional[List[str]] = None,
-    min_year: Optional[int] = None,
-    max_year: Optional[int] = None
-) -> pd.DataFrame:
-    """
-    Preprocess and filter data for seasonality analysis.
-
-    Args:
-        df_long: Dataframe in long format
-        asset_filter: Asset to filter (e.g., 'Óleo de Soja')
-        month_codes: List of month codes to include (e.g., ['F', 'H', 'K'])
-        min_year: Minimum year
-        max_year: Maximum year
-
-    Returns:
-        Preprocessed dataframe with additional columns
-    """
-    df = df_long.copy()
-
-    # Ensure date is datetime
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df = df.dropna(subset=['date'])
-
-    # Filter by asset
-    if asset_filter:
-        df = df[df['asset'] == asset_filter].copy()
-
-    # Filter by month codes
-    if month_codes and 'All' not in month_codes:
-        # Convert to uppercase for comparison
-        month_codes_upper = [m.upper() for m in month_codes]
-        df = df[df['month_code'].isin(month_codes_upper)].copy()
-
-    # Add time-based columns from date
-    df['year'] = df['date'].dt.year
-    df['month'] = df['date'].dt.month
-    df['weekofyear'] = df['date'].dt.isocalendar().week
-    df['dayofyear'] = df['date'].dt.dayofyear
-
-    # Filter by year range (of the date, not contract year)
-    if min_year:
-        df = df[df['year'] >= min_year].copy()
-    if max_year:
-        df = df[df['year'] <= max_year].copy()
-
-    # Calculate returns (grouped by contract_id)
-    df = df.sort_values(['contract_id', 'date'])
-    df['return'] = df.groupby('contract_id')['price'].pct_change() * 100
-
-    return df.dropna(subset=['return'])
-
-
-# ============================================================
-# Seasonality Computation
+# Helper Functions
 # ============================================================
 @st.cache_data
-def compute_seasonality(
-    df: pd.DataFrame,
-    granularity: str = 'dayofyear',
-    apply_smoothing: bool = False,
-    rolling_window: int = 5
-) -> pd.DataFrame:
+def calculate_returns_by_period(df: pd.DataFrame, asset_col: str, period_type: str) -> pd.DataFrame:
     """
-    Compute seasonality metrics aggregated by time bucket.
+    Calcula retornos diários e agrupa por período (mês, dia do ano, etc).
 
     Args:
-        df: Preprocessed dataframe with returns
-        granularity: 'dayofyear', 'weekofyear', or 'month'
-        apply_smoothing: Whether to apply rolling average smoothing
-        rolling_window: Window size for smoothing
+        df: DataFrame com coluna 'date' e ativo
+        asset_col: Nome da coluna do ativo
+        period_type: 'month', 'dayofyear', 'weekofyear'
 
     Returns:
-        Aggregated seasonality metrics by bucket
+        DataFrame com estatísticas por período
     """
-    bucket_col = granularity
+    # Prepare data
+    df_work = df[['date', asset_col]].copy()
+    df_work['date'] = pd.to_datetime(df_work['date'])
+    df_work = df_work.dropna().sort_values('date')
 
-    # Group by bucket
-    grouped = df.groupby(bucket_col)['return']
+    # Calculate daily returns
+    df_work['return'] = df_work[asset_col].pct_change() * 100
+    df_work = df_work.dropna(subset=['return'])
 
-    # Compute aggregations
-    agg_dict = {
-        'mean_return': grouped.mean(),
-        'median_return': grouped.median(),
-        'std_return': grouped.std(),
-        'count': grouped.count(),
-        'min_return': grouped.min(),
-        'max_return': grouped.max(),
-        'p05': grouped.quantile(0.05),
-        'p25': grouped.quantile(0.25),
-        'p75': grouped.quantile(0.75),
-        'p95': grouped.quantile(0.95),
-    }
+    # Add period columns
+    df_work['year'] = df_work['date'].dt.year
+    df_work['month'] = df_work['date'].dt.month
+    df_work['dayofyear'] = df_work['date'].dt.dayofyear
+    df_work['weekofyear'] = df_work['date'].dt.isocalendar().week
 
-    result = pd.DataFrame(agg_dict).reset_index()
+    # Group by period
+    grouped = df_work.groupby(period_type)['return']
 
-    # Hit rate (% positive returns)
-    hit_rates = df.groupby(bucket_col)['return'].apply(lambda x: (x > 0).sum() / len(x) if len(x) > 0 else 0)
-    result['hit_rate'] = hit_rates.values
+    # Calculate statistics
+    stats_df = pd.DataFrame({
+        'periodo': grouped.apply(lambda x: x.name).index,
+        'retorno_medio': grouped.mean(),
+        'retorno_mediano': grouped.median(),
+        'desvio_padrao': grouped.std(),
+        'minimo': grouped.min(),
+        'maximo': grouped.max(),
+        'observacoes': grouped.count(),
+    }).reset_index(drop=True)
 
-    # Sharpe-like ratio
-    result['sharpe_like'] = np.where(
-        result['std_return'] > 0,
-        result['mean_return'] / result['std_return'],
+    # Calculate hit rate (% of positive returns)
+    stats_df['taxa_acerto'] = df_work.groupby(period_type)['return'].apply(
+        lambda x: (x > 0).sum() / len(x) * 100 if len(x) > 0 else 0
+    ).values
+
+    # Calculate Sharpe-like ratio (mean / std)
+    stats_df['sharpe_like'] = np.where(
+        stats_df['desvio_padrao'] > 0,
+        stats_df['retorno_medio'] / stats_df['desvio_padrao'],
         0
     )
 
-    # Statistical significance (if scipy available)
+    # Statistical significance (t-test against zero)
     if HAS_SCIPY:
         p_values = []
-        for bucket_val in result[bucket_col]:
-            bucket_returns = df[df[bucket_col] == bucket_val]['return'].values
-            if len(bucket_returns) > 2:
-                _, p_val = stats.ttest_1samp(bucket_returns, 0)
+        for period_val in stats_df['periodo']:
+            period_returns = df_work[df_work[period_type] == period_val]['return'].values
+            if len(period_returns) > 2:
+                _, p_val = stats.ttest_1samp(period_returns, 0)
                 p_values.append(p_val)
             else:
                 p_values.append(1.0)
-        result['p_value'] = p_values
-        result['is_significant'] = result['p_value'] < 0.05
+        stats_df['p_valor'] = p_values
+        stats_df['significante'] = stats_df['p_valor'] < 0.05
 
-    # Skewness and kurtosis
-    if HAS_SCIPY:
-        skew_vals = df.groupby(bucket_col)['return'].apply(lambda x: stats.skew(x) if len(x) > 2 else 0)
-        kurt_vals = df.groupby(bucket_col)['return'].apply(lambda x: stats.kurtosis(x) if len(x) > 2 else 0)
-        result['skewness'] = skew_vals.values
-        result['kurtosis'] = kurt_vals.values
+    # Filter periods with minimum observations
+    stats_df = stats_df[stats_df['observacoes'] >= 10].copy()
 
-    # Filter by minimum samples
-    result = result[result['count'] >= CONFIG['min_samples_per_bucket']].copy()
+    return stats_df
 
-    # Apply smoothing if requested
-    if apply_smoothing and len(result) > rolling_window:
-        result['mean_return_smoothed'] = result['mean_return'].rolling(window=rolling_window, center=True).mean()
-        result['std_return_smoothed'] = result['std_return'].rolling(window=rolling_window, center=True).mean()
 
-    return result
+def get_period_label(period_type: str, period_val: int) -> str:
+    """Retorna label amigável para o período."""
+    if period_type == 'month':
+        meses = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+                 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        return meses[int(period_val)]
+    elif period_type == 'weekofyear':
+        return f"Sem {int(period_val)}"
+    elif period_type == 'dayofyear':
+        return f"Dia {int(period_val)}"
+    return str(int(period_val))
 
 
 # ============================================================
-# Insight Generation
+# Sidebar - Configuration
 # ============================================================
-def generate_actionable_insights(
-    seasonality_df: pd.DataFrame,
-    granularity: str
-) -> List[str]:
-    """
-    Generate actionable insights from seasonality analysis.
+with st.sidebar:
+    section("Configuração", "Parâmetros da análise", "⚙️")
 
-    Args:
-        seasonality_df: Seasonality metrics dataframe
-        granularity: Time granularity used
-
-    Returns:
-        List of insight strings
-    """
-    insights = []
-
-    if seasonality_df.empty:
-        return ["⚠️ Insufficient data to generate insights."]
-
-    bucket_col = granularity
-    bucket_label = {
-        'dayofyear': 'Day',
-        'weekofyear': 'Week',
-        'month': 'Month'
-    }.get(granularity, granularity)
-
-    # Best periods by Sharpe-like
-    top_sharpe = seasonality_df.nlargest(CONFIG['top_n_periods'], 'sharpe_like')
-    if not top_sharpe.empty:
-        best_period = top_sharpe.iloc[0]
-        insights.append(
-            f"🟢 **Best Period**: {bucket_label} {int(best_period[bucket_col])} shows the strongest risk-adjusted return "
-            f"(Sharpe-like: {best_period['sharpe_like']:.2f}, Mean Return: {best_period['mean_return']:.2f}%, "
-            f"Hit Rate: {best_period['hit_rate']*100:.1f}%)"
-        )
-
-    # Worst periods by Sharpe-like
-    bottom_sharpe = seasonality_df.nsmallest(CONFIG['top_n_periods'], 'sharpe_like')
-    if not bottom_sharpe.empty:
-        worst_period = bottom_sharpe.iloc[0]
-        insights.append(
-            f"🔴 **Worst Period**: {bucket_label} {int(worst_period[bucket_col])} shows the weakest risk-adjusted return "
-            f"(Sharpe-like: {worst_period['sharpe_like']:.2f}, Mean Return: {worst_period['mean_return']:.2f}%, "
-            f"Hit Rate: {worst_period['hit_rate']*100:.1f}%)"
-        )
-
-    # Consistent periods (high hit rate, low std)
-    std_threshold = seasonality_df['std_return'].quantile(CONFIG['std_percentile_low'] / 100)
-    consistent = seasonality_df[
-        (seasonality_df['hit_rate'] >= CONFIG['hit_rate_threshold']) &
-        (seasonality_df['std_return'] <= std_threshold)
-    ]
-
-    if not consistent.empty:
-        best_consistent = consistent.nlargest(1, 'mean_return').iloc[0]
-        insights.append(
-            f"✅ **Consistent Period**: {bucket_label} {int(best_consistent[bucket_col])} is historically consistent "
-            f"with {best_consistent['hit_rate']*100:.1f}% hit rate and below-median volatility "
-            f"({best_consistent['std_return']:.2f}%)"
-        )
-
-    # High-risk periods (high std, negative skew)
-    std_high_threshold = seasonality_df['std_return'].quantile(CONFIG['std_percentile_high'] / 100)
-    risky = seasonality_df[seasonality_df['std_return'] >= std_high_threshold]
-
-    if not risky.empty and HAS_SCIPY:
-        risky_with_skew = risky[risky.get('skewness', 0) < -0.5]
-        if not risky_with_skew.empty:
-            most_risky = risky_with_skew.iloc[0]
-            insights.append(
-                f"⚠️ **High-Risk Period**: {bucket_label} {int(most_risky[bucket_col])} shows elevated volatility "
-                f"({most_risky['std_return']:.2f}%) with negative skewness ({most_risky.get('skewness', 0):.2f}). "
-                f"5th percentile return: {most_risky['p05']:.2f}%"
-            )
-
-    # Statistical significance
-    if HAS_SCIPY and 'is_significant' in seasonality_df.columns:
-        significant_positive = seasonality_df[
-            (seasonality_df['is_significant']) &
-            (seasonality_df['mean_return'] > 0)
-        ]
-
-        if not significant_positive.empty:
-            top_sig = significant_positive.nlargest(1, 'mean_return').iloc[0]
-            insights.append(
-                f"📊 **Statistically Significant**: {bucket_label} {int(top_sig[bucket_col])} has a mean return of "
-                f"{top_sig['mean_return']:.2f}% that is statistically significant (p-value: {top_sig['p_value']:.3f})"
-            )
-
-    # Overall hit rate summary
-    overall_hit_rate = seasonality_df['hit_rate'].mean()
-    above_avg = seasonality_df[seasonality_df['hit_rate'] > overall_hit_rate]
-    insights.append(
-        f"📈 **Overall Pattern**: {len(above_avg)} out of {len(seasonality_df)} periods show above-average hit rates "
-        f"(avg: {overall_hit_rate*100:.1f}%)"
+    # Asset selection using the standard picker
+    st.markdown("### Ativo")
+    asset_col, asset_label = categorized_asset_picker(
+        BASE_DF,
+        state_key="seasonality_asset",
+        show_favorites=True
     )
 
-    # Volatility regime
-    high_vol_periods = len(seasonality_df[seasonality_df['std_return'] >= std_high_threshold])
-    low_vol_periods = len(seasonality_df[seasonality_df['std_return'] <= std_threshold])
-    insights.append(
-        f"📉 **Volatility Distribution**: {high_vol_periods} high-volatility periods vs {low_vol_periods} low-volatility periods. "
-        f"Median volatility: {seasonality_df['std_return'].median():.2f}%"
+    # Period selection
+    st.markdown("### Período Histórico")
+    start_date, end_date = date_range_picker(
+        BASE_DF['date'],
+        state_key="seasonality_range",
+        default_days=365 * 5  # 5 years default
     )
 
-    # Range of returns
-    best_return = seasonality_df['mean_return'].max()
-    worst_return = seasonality_df['mean_return'].min()
-    insights.append(
-        f"🎯 **Return Range**: Mean returns range from {worst_return:.2f}% to {best_return:.2f}% across all periods, "
-        f"spanning {abs(best_return - worst_return):.2f}% points"
+    # Granularity
+    st.markdown("### Granularidade")
+    granularity = st.radio(
+        "Agrupar por",
+        options=['month', 'weekofyear', 'dayofyear'],
+        format_func=lambda x: {
+            'month': '📅 Mês do Ano',
+            'weekofyear': '📆 Semana do Ano',
+            'dayofyear': '🗓️ Dia do Ano'
+        }[x],
+        help="Como agrupar os dados históricos para análise de sazonalidade"
     )
 
-    return insights
-
+    granularity_label = {
+        'month': 'Mês',
+        'weekofyear': 'Semana',
+        'dayofyear': 'Dia'
+    }[granularity]
 
 # ============================================================
-# Visualization Functions
+# Filter data
 # ============================================================
-def plot_seasonality_main(
-    seasonality_df: pd.DataFrame,
-    granularity: str,
-    metric: str = 'mean_return',
-    show_bands: bool = True
-) -> go.Figure:
-    """
-    Create main seasonality line chart with confidence bands.
+BASE_DF['date'] = pd.to_datetime(BASE_DF['date'], errors='coerce')
+mask = (BASE_DF['date'].dt.date >= start_date) & (BASE_DF['date'].dt.date <= end_date)
+df_filtered = BASE_DF[mask].copy()
 
-    Args:
-        seasonality_df: Seasonality metrics dataframe
-        granularity: Time granularity
-        metric: Metric to plot
-        show_bands: Whether to show ±1 std bands
+if df_filtered.empty or asset_col not in df_filtered.columns:
+    st.error(f"❌ Sem dados disponíveis para {asset_label} no período selecionado.")
+    st.stop()
 
-    Returns:
-        Plotly figure
-    """
-    bucket_col = granularity
+# Remove NaN values
+df_filtered = df_filtered[['date', asset_col]].dropna()
 
-    fig = go.Figure()
+if len(df_filtered) < 30:
+    st.warning("⚠️ Dados insuficientes para análise de sazonalidade. Selecione um período maior.")
+    st.stop()
 
-    # Use smoothed if available, otherwise raw
-    y_col = f"{metric}_smoothed" if f"{metric}_smoothed" in seasonality_df.columns else metric
+# ============================================================
+# Calculate seasonality statistics
+# ============================================================
+with st.spinner("Calculando padrões de sazonalidade..."):
+    seasonality_stats = calculate_returns_by_period(df_filtered, asset_col, granularity)
 
-    # Main line
+if seasonality_stats.empty:
+    st.warning("⚠️ Não foi possível calcular estatísticas de sazonalidade. Tente outro período ou ativo.")
+    st.stop()
+
+# ============================================================
+# KPIs Summary
+# ============================================================
+st.markdown("## 📊 Resumo da Análise")
+
+with st.container(border=True):
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    # Best period
+    best_idx = seasonality_stats['sharpe_like'].idxmax()
+    best_period = seasonality_stats.loc[best_idx]
+
+    with col1:
+        st.metric(
+            "Melhor Período",
+            get_period_label(granularity, best_period['periodo']),
+            f"{best_period['retorno_medio']:.2f}%",
+            help=f"Período com melhor retorno ajustado por risco (Sharpe-like: {best_period['sharpe_like']:.2f})"
+        )
+
+    # Worst period
+    worst_idx = seasonality_stats['sharpe_like'].idxmin()
+    worst_period = seasonality_stats.loc[worst_idx]
+
+    with col2:
+        st.metric(
+            "Pior Período",
+            get_period_label(granularity, worst_period['periodo']),
+            f"{worst_period['retorno_medio']:.2f}%",
+            help=f"Período com pior retorno ajustado por risco (Sharpe-like: {worst_period['sharpe_like']:.2f})"
+        )
+
+    # Average hit rate
+    avg_hit_rate = seasonality_stats['taxa_acerto'].mean()
+    hit_color = "🟢" if avg_hit_rate > 55 else "🟡" if avg_hit_rate > 50 else "🔴"
+
+    with col3:
+        st.metric(
+            "Taxa de Acerto Média",
+            f"{avg_hit_rate:.1f}%",
+            f"{hit_color}",
+            help="% médio de dias com retorno positivo em cada período"
+        )
+
+    # Most consistent period (high hit rate, low std)
+    seasonality_stats['consistencia'] = seasonality_stats['taxa_acerto'] / (seasonality_stats['desvio_padrao'] + 0.01)
+    consistent_idx = seasonality_stats['consistencia'].idxmax()
+    consistent_period = seasonality_stats.loc[consistent_idx]
+
+    with col4:
+        st.metric(
+            "Período Mais Consistente",
+            get_period_label(granularity, consistent_period['periodo']),
+            f"{consistent_period['taxa_acerto']:.0f}% acerto",
+            help=f"Período com maior taxa de acerto e menor volatilidade (std: {consistent_period['desvio_padrao']:.2f}%)"
+        )
+
+    # Total observations
+    total_obs = seasonality_stats['observacoes'].sum()
+
+    with col5:
+        st.metric(
+            "Total de Observações",
+            f"{total_obs:,}",
+            help=f"{len(seasonality_stats)} períodos analisados"
+        )
+
+st.divider()
+
+# ============================================================
+# Main Chart - Seasonality Pattern
+# ============================================================
+st.markdown(f"## 📈 Padrão de Sazonalidade - Retorno Médio por {granularity_label}")
+
+with st.container(border=True):
+    fig = make_subplots(
+        rows=2, cols=1,
+        row_heights=[0.65, 0.35],
+        subplot_titles=(
+            f"Retorno Médio Diário por {granularity_label}",
+            "Taxa de Acerto (%)"
+        ),
+        vertical_spacing=0.12
+    )
+
+    # Upper panel - Mean return
     fig.add_trace(
         go.Scatter(
-            x=seasonality_df[bucket_col],
-            y=seasonality_df[y_col],
+            x=seasonality_stats['periodo'],
+            y=seasonality_stats['retorno_medio'],
             mode='lines+markers',
-            name=metric.replace('_', ' ').title(),
+            name='Retorno Médio',
             line=dict(color='#1f77b4', width=2),
-            marker=dict(size=6)
-        )
+            marker=dict(size=6),
+            hovertemplate='%{x}: %{y:.2f}%<extra></extra>'
+        ),
+        row=1, col=1
     )
 
     # Confidence bands (±1 std)
-    if show_bands and 'std_return' in seasonality_df.columns:
-        upper = seasonality_df[y_col] + seasonality_df['std_return']
-        lower = seasonality_df[y_col] - seasonality_df['std_return']
+    upper_band = seasonality_stats['retorno_medio'] + seasonality_stats['desvio_padrao']
+    lower_band = seasonality_stats['retorno_medio'] - seasonality_stats['desvio_padrao']
 
-        fig.add_trace(
-            go.Scatter(
-                x=seasonality_df[bucket_col],
-                y=upper,
-                mode='lines',
-                name='+1 Std',
-                line=dict(width=0),
-                showlegend=False,
-                hoverinfo='skip'
-            )
-        )
+    fig.add_trace(
+        go.Scatter(
+            x=seasonality_stats['periodo'],
+            y=upper_band,
+            mode='lines',
+            line=dict(width=0),
+            showlegend=False,
+            hoverinfo='skip'
+        ),
+        row=1, col=1
+    )
 
-        fig.add_trace(
-            go.Scatter(
-                x=seasonality_df[bucket_col],
-                y=lower,
-                mode='lines',
-                name='-1 Std',
-                line=dict(width=0),
-                fillcolor='rgba(31, 119, 180, 0.2)',
-                fill='tonexty',
-                showlegend=True,
-                hoverinfo='skip'
-            )
-        )
+    fig.add_trace(
+        go.Scatter(
+            x=seasonality_stats['periodo'],
+            y=lower_band,
+            mode='lines',
+            line=dict(width=0),
+            fillcolor='rgba(31, 119, 180, 0.15)',
+            fill='tonexty',
+            name='±1 Desvio Padrão',
+            hoverinfo='skip'
+        ),
+        row=1, col=1
+    )
 
     # Zero line
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.3, row=1, col=1)
 
-    # Highlight significant periods
-    if HAS_SCIPY and 'is_significant' in seasonality_df.columns:
-        sig_periods = seasonality_df[seasonality_df['is_significant']]
+    # Highlight statistically significant periods
+    if HAS_SCIPY and 'significante' in seasonality_stats.columns:
+        sig_periods = seasonality_stats[seasonality_stats['significante']]
         if not sig_periods.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=sig_periods[bucket_col],
-                    y=sig_periods[y_col],
+                    x=sig_periods['periodo'],
+                    y=sig_periods['retorno_medio'],
                     mode='markers',
-                    name='Statistically Significant (p<0.05)',
+                    name='Estatisticamente Significante',
                     marker=dict(
-                        size=12,
+                        size=10,
                         color='red',
                         symbol='star',
                         line=dict(color='darkred', width=1)
-                    )
-                )
+                    ),
+                    hovertemplate='%{x}: %{y:.2f}% (p<0.05)<extra></extra>'
+                ),
+                row=1, col=1
             )
 
-    bucket_label = {
-        'dayofyear': 'Day of Year',
-        'weekofyear': 'Week of Year',
-        'month': 'Month'
-    }.get(granularity, granularity)
-
-    fig.update_layout(
-        title=f"Seasonality Pattern - {metric.replace('_', ' ').title()}",
-        xaxis_title=bucket_label,
-        yaxis_title=metric.replace('_', ' ').title() + ' (%)',
-        hovermode='x unified',
-        height=500,
-        template='plotly_white'
-    )
-
-    return fig
-
-
-def plot_hit_rate_bars(seasonality_df: pd.DataFrame, granularity: str) -> go.Figure:
-    """
-    Create bar chart of hit rates by period.
-
-    Args:
-        seasonality_df: Seasonality metrics dataframe
-        granularity: Time granularity
-
-    Returns:
-        Plotly figure
-    """
-    bucket_col = granularity
-
-    # Color bars by hit rate level
-    colors = ['green' if x >= 0.6 else 'orange' if x >= 0.5 else 'red'
-              for x in seasonality_df['hit_rate']]
-
-    fig = go.Figure()
+    # Lower panel - Hit rate
+    colors = ['green' if x >= 60 else 'orange' if x >= 50 else 'red'
+              for x in seasonality_stats['taxa_acerto']]
 
     fig.add_trace(
         go.Bar(
-            x=seasonality_df[bucket_col],
-            y=seasonality_df['hit_rate'] * 100,
+            x=seasonality_stats['periodo'],
+            y=seasonality_stats['taxa_acerto'],
             marker_color=colors,
-            name='Hit Rate'
-        )
+            name='Taxa de Acerto',
+            hovertemplate='%{x}: %{y:.1f}%<extra></extra>',
+            showlegend=False
+        ),
+        row=2, col=1
     )
 
-    # Reference line at 50%
-    fig.add_hline(y=50, line_dash="dash", line_color="gray", opacity=0.5)
+    # 50% reference line
+    fig.add_hline(y=50, line_dash="dash", line_color="gray", opacity=0.5, row=2, col=1)
 
-    bucket_label = {
-        'dayofyear': 'Day of Year',
-        'weekofyear': 'Week of Year',
-        'month': 'Month'
-    }.get(granularity, granularity)
+    # Update layout
+    fig.update_xaxes(title_text=granularity_label, row=2, col=1)
+    fig.update_yaxes(title_text="Retorno (%)", row=1, col=1)
+    fig.update_yaxes(title_text="Taxa de Acerto (%)", row=2, col=1)
 
     fig.update_layout(
-        title="Hit Rate by Period",
-        xaxis_title=bucket_label,
-        yaxis_title="Hit Rate (%)",
-        height=400,
+        height=700,
+        hovermode='x unified',
         template='plotly_white',
-        showlegend=False
-    )
-
-    return fig
-
-
-def plot_heatmap_year_month(df: pd.DataFrame) -> go.Figure:
-    """
-    Create heatmap of returns by Year x Month.
-
-    Args:
-        df: Preprocessed dataframe with returns
-
-    Returns:
-        Plotly figure
-    """
-    # Pivot table: rows = year, cols = month
-    pivot = df.pivot_table(
-        values='return',
-        index='year',
-        columns='month',
-        aggfunc='mean'
-    )
-
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=pivot.values,
-            x=pivot.columns,
-            y=pivot.index,
-            colorscale='RdYlGn',
-            zmid=0,
-            text=np.round(pivot.values, 2),
-            texttemplate='%{text}',
-            textfont={"size": 10},
-            colorbar=dict(title="Mean Return (%)")
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
         )
     )
 
-    fig.update_layout(
-        title="Return Heatmap: Year vs Month",
-        xaxis_title="Month",
-        yaxis_title="Year",
-        height=400,
-        template='plotly_white'
-    )
+    st.plotly_chart(fig, use_container_width=True)
 
-    return fig
+    # Explanation
+    with st.expander("ℹ️ Como interpretar este gráfico"):
+        st.markdown(f"""
+        ### 📊 Componentes do Gráfico
 
+        **Painel Superior - Retorno Médio:**
+        - **Linha azul**: Retorno médio diário (%) para cada {granularity_label.lower()}
+        - **Banda cinza**: Intervalo de ±1 desvio padrão (mostra a volatilidade)
+        - **Estrelas vermelhas**: Períodos com retorno estatisticamente significante (p < 0.05)
+        - **Linha pontilhada**: Retorno zero (referência)
+
+        **Painel Inferior - Taxa de Acerto:**
+        - **Verde**: Taxa de acerto ≥ 60% (períodos consistentemente positivos)
+        - **Laranja**: Taxa de acerto 50-60% (períodos neutros/ligeiramente positivos)
+        - **Vermelho**: Taxa de acerto < 50% (períodos frequentemente negativos)
+        - **Linha pontilhada**: 50% (referência - equivalente a aleatório)
+
+        ### 🎯 Como Usar para Trading
+
+        **Buscar Oportunidades:**
+        - Períodos com retorno médio positivo + alta taxa de acerto + baixa volatilidade = oportunidades de compra
+        - Períodos com retorno médio negativo + baixa taxa de acerto = potenciais oportunidades de venda
+
+        **Avaliar Risco:**
+        - Banda larga (±1 std) = maior incerteza, retornos mais dispersos
+        - Banda estreita = maior previsibilidade
+
+        **Validar Padrões:**
+        - Estrelas vermelhas indicam que o padrão é estatisticamente robusto (não é apenas sorte)
+        - Mais observações = padrão mais confiável
+        """)
+
+st.divider()
 
 # ============================================================
-# Streamlit Page
+# Rankings - Top/Bottom Periods
 # ============================================================
-def main():
-    st.markdown("# 📅 Análise de Sazonalidade")
-    st.markdown("Identifique padrões sazonais em contratos futuros de commodities e gere insights acionáveis baseados em estatísticas históricas")
-    st.divider()
+st.markdown("## 🏆 Rankings de Períodos")
 
-    # Load data (WIDE format)
-    with st.spinner("Carregando dados..."):
-        if CONFIG["data_source"] == "pipeline":
-            raw_df_wide = load_data_from_pipeline()
-        else:
-            raw_df_wide = load_data_from_csv(CONFIG["csv_path"])
-
-        if raw_df_wide.empty:
-            st.error("❌ No data available. Check your data source configuration.")
-            st.stop()
-
-        # Transform WIDE to LONG format
-        df_long = transform_wide_to_long(raw_df_wide)
-
-        if df_long.empty:
-            st.error("❌ No valid contract columns found in data.")
-            st.stop()
-
-    # Get available assets and metadata
-    available_assets = sorted(df_long['asset'].unique())
-    available_month_codes = sorted(df_long['month_code'].unique())
-
-    # Sidebar configuration
-    with st.sidebar:
-        st.markdown("## ⚙️ Configuração da Análise")
-
-        # Asset selection
-        selected_asset = st.selectbox(
-            "Ativo",
-            options=available_assets,
-            help="Selecione o ativo para análise de sazonalidade"
-        )
-
-        # Month code selection
-        selected_months = st.multiselect(
-            "Contratos (Month Code)",
-            options=['All'] + available_month_codes,
-            default=['All'],
-            help="Selecione os meses de vencimento dos contratos"
-        )
-
-        # Year range
-        if 'date' in df_long.columns:
-            min_year_data = int(df_long['date'].dt.year.min())
-            max_year_data = int(df_long['date'].dt.year.max())
-
-            year_range = st.slider(
-                "Período (anos)",
-                min_value=min_year_data,
-                max_value=max_year_data,
-                value=(min_year_data, max_year_data)
-            )
-            min_year, max_year = year_range
-        else:
-            min_year, max_year = None, None
-
-        # Granularity
-        granularity = st.selectbox(
-            "Granularidade",
-            options=['dayofyear', 'weekofyear', 'month'],
-            format_func=lambda x: {
-                'dayofyear': 'Dia do Ano (DoY)',
-                'weekofyear': 'Semana do Ano (WoY)',
-                'month': 'Mês'
-            }[x]
-        )
-
-        # Metric
-        metric_options = {
-            'mean_return': 'Retorno Médio',
-            'median_return': 'Retorno Mediano',
-            'std_return': 'Volatilidade (Std)',
-            'hit_rate': 'Taxa de Acerto (%)',
-            'sharpe_like': 'Sharpe-like Ratio'
-        }
-        selected_metric = st.selectbox(
-            "Métrica",
-            options=list(metric_options.keys()),
-            format_func=lambda x: metric_options[x]
-        )
-
-        # Smoothing
-        apply_smoothing = st.checkbox(
-            "Aplicar suavização (rolling 5d)",
-            value=False,
-            help="Suaviza a série com média móvel de 5 períodos"
-        )
-
-        st.divider()
-
-        generate_report = st.button("🔍 Gerar Análise", type="primary", use_container_width=True)
-
-    # Main content
-    if not generate_report:
-        st.info("👈 Configure os parâmetros na barra lateral e clique em **Gerar Análise**")
-
-        # Show data preview
-        with st.expander("📊 Preview dos Dados (LONG format)"):
-            st.dataframe(df_long.head(100), use_container_width=True)
-
-        st.stop()
-
-    # Process data
-    with st.spinner("Processando dados..."):
-        processed_df = preprocess_data(
-            df_long,
-            asset_filter=selected_asset,
-            month_codes=selected_months,
-            min_year=min_year,
-            max_year=max_year
-        )
-
-    if processed_df.empty:
-        st.error("❌ Nenhum dado disponível após aplicar os filtros. Tente ajustar os parâmetros.")
-        st.stop()
-
-    # Compute seasonality
-    with st.spinner("Calculando métricas de sazonalidade..."):
-        seasonality_df = compute_seasonality(
-            processed_df,
-            granularity=granularity,
-            apply_smoothing=apply_smoothing,
-            rolling_window=CONFIG["rolling_window"]
-        )
-
-    if seasonality_df.empty:
-        st.warning("⚠️ Dados insuficientes para análise de sazonalidade. Reduza o filtro de samples mínimos ou amplie o período.")
-        st.stop()
-
-    # KPIs
-    st.markdown("## 📊 KPIs - Visão Geral")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        best_period = seasonality_df.nlargest(1, 'sharpe_like').iloc[0]
-        st.metric(
-            "Melhor Período (Sharpe)",
-            f"{granularity.upper()}: {int(best_period[granularity])}",
-            f"{best_period['mean_return']:.2f}%"
-        )
-
-    with col2:
-        worst_period = seasonality_df.nsmallest(1, 'sharpe_like').iloc[0]
-        st.metric(
-            "Pior Período (Sharpe)",
-            f"{granularity.upper()}: {int(worst_period[granularity])}",
-            f"{worst_period['mean_return']:.2f}%"
-        )
-
-    with col3:
-        avg_hit_rate = seasonality_df['hit_rate'].mean()
-        st.metric(
-            "Taxa de Acerto Média",
-            f"{avg_hit_rate*100:.1f}%"
-        )
-
-    with col4:
-        avg_sharpe = seasonality_df['sharpe_like'].mean()
-        st.metric(
-            "Sharpe-like Médio",
-            f"{avg_sharpe:.2f}"
-        )
-
-    st.divider()
-
-    # Main chart
-    st.markdown(f"## 📈 Padrão de Sazonalidade - {metric_options[selected_metric]}")
-
-    fig_main = plot_seasonality_main(
-        seasonality_df,
-        granularity,
-        metric=selected_metric,
-        show_bands=(selected_metric in ['mean_return', 'median_return'])
-    )
-    st.plotly_chart(fig_main, use_container_width=True)
-
-    # Hit rate chart
-    st.markdown("## 🎯 Taxa de Acerto por Período")
-    fig_hit_rate = plot_hit_rate_bars(seasonality_df, granularity)
-    st.plotly_chart(fig_hit_rate, use_container_width=True)
-
-    # Heatmap (if granularity is month)
-    if granularity == 'month' and len(processed_df) > 100:
-        st.markdown("## 🔥 Heatmap de Retornos (Ano x Mês)")
-        fig_heatmap = plot_heatmap_year_month(processed_df)
-        st.plotly_chart(fig_heatmap, use_container_width=True)
-
-    st.divider()
-
-    # Rankings
-    st.markdown("## 🏆 Rankings de Períodos")
-
+with st.container(border=True):
     col_rank1, col_rank2 = st.columns(2)
 
     with col_rank1:
-        st.markdown("### 🟢 Top 5 - Melhores Períodos (Sharpe)")
-        top_periods = seasonality_df.nlargest(5, 'sharpe_like')[[
-            granularity, 'mean_return', 'hit_rate', 'std_return', 'sharpe_like', 'count'
+        st.markdown("### 🟢 Top 5 - Melhores Períodos")
+        st.caption("Ordenado por retorno ajustado por risco (Sharpe-like)")
+
+        top5 = seasonality_stats.nlargest(5, 'sharpe_like').copy()
+        top5['periodo_label'] = top5['periodo'].apply(lambda x: get_period_label(granularity, x))
+
+        display_top5 = top5[[
+            'periodo_label', 'retorno_medio', 'taxa_acerto',
+            'desvio_padrao', 'sharpe_like', 'observacoes'
         ]].copy()
-        top_periods['hit_rate'] = (top_periods['hit_rate'] * 100).round(1)
-        st.dataframe(top_periods, use_container_width=True, hide_index=True)
+        display_top5.columns = ['Período', 'Ret. Médio (%)', 'Tx. Acerto (%)',
+                                'Volatilidade (%)', 'Sharpe-like', 'Obs.']
+
+        st.dataframe(
+            display_top5.style.format({
+                'Ret. Médio (%)': '{:.2f}',
+                'Tx. Acerto (%)': '{:.1f}',
+                'Volatilidade (%)': '{:.2f}',
+                'Sharpe-like': '{:.2f}',
+                'Obs.': '{:.0f}'
+            }).background_gradient(subset=['Sharpe-like'], cmap='RdYlGn', vmin=-1, vmax=1),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.caption("💡 **Sharpe-like**: Quanto maior, melhor o retorno ajustado por risco. >0.5 é bom, >1.0 é excelente.")
 
     with col_rank2:
-        st.markdown("### 🔴 Bottom 5 - Piores Períodos (Sharpe)")
-        bottom_periods = seasonality_df.nsmallest(5, 'sharpe_like')[[
-            granularity, 'mean_return', 'hit_rate', 'std_return', 'sharpe_like', 'count'
+        st.markdown("### 🔴 Bottom 5 - Piores Períodos")
+        st.caption("Ordenado por retorno ajustado por risco (Sharpe-like)")
+
+        bottom5 = seasonality_stats.nsmallest(5, 'sharpe_like').copy()
+        bottom5['periodo_label'] = bottom5['periodo'].apply(lambda x: get_period_label(granularity, x))
+
+        display_bottom5 = bottom5[[
+            'periodo_label', 'retorno_medio', 'taxa_acerto',
+            'desvio_padrao', 'sharpe_like', 'observacoes'
         ]].copy()
-        bottom_periods['hit_rate'] = (bottom_periods['hit_rate'] * 100).round(1)
-        st.dataframe(bottom_periods, use_container_width=True, hide_index=True)
+        display_bottom5.columns = ['Período', 'Ret. Médio (%)', 'Tx. Acerto (%)',
+                                   'Volatilidade (%)', 'Sharpe-like', 'Obs.']
 
-    st.divider()
-
-    # Actionable Insights
-    st.markdown("## 💡 Insights Acionáveis")
-
-    with st.spinner("Gerando insights..."):
-        insights = generate_actionable_insights(seasonality_df, granularity)
-
-    for insight in insights:
-        st.markdown(insight)
-
-    st.divider()
-
-    # Export
-    st.markdown("## 📥 Exportar Dados")
-
-    col_exp1, col_exp2 = st.columns(2)
-
-    with col_exp1:
-        # Export seasonality metrics
-        export_df = seasonality_df.copy()
-        export_df['hit_rate'] = (export_df['hit_rate'] * 100).round(2)
-
-        csv_seasonality = export_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            "📥 Baixar Métricas de Sazonalidade (CSV)",
-            data=csv_seasonality,
-            file_name=f"seasonality_{selected_asset or 'all'}_{granularity}_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
+        st.dataframe(
+            display_bottom5.style.format({
+                'Ret. Médio (%)': '{:.2f}',
+                'Tx. Acerto (%)': '{:.1f}',
+                'Volatilidade (%)': '{:.2f}',
+                'Sharpe-like': '{:.2f}',
+                'Obs.': '{:.0f}'
+            }).background_gradient(subset=['Sharpe-like'], cmap='RdYlGn_r', vmin=-1, vmax=1),
+            use_container_width=True,
+            hide_index=True
         )
 
-    with col_exp2:
-        # Export insights as text
-        insights_text = "\n".join(insights)
-        st.download_button(
-            "📥 Baixar Insights (TXT)",
-            data=insights_text.encode('utf-8'),
-            file_name=f"insights_{selected_asset or 'all'}_{granularity}_{datetime.now().strftime('%Y%m%d')}.txt",
-            mime="text/plain"
-        )
+        st.caption("⚠️ Períodos com Sharpe-like negativo têm retorno médio negativo ou muito voláteis.")
 
-    # Footer info
-    st.divider()
-    st.caption(f"""
-    **Configuração da Análise:**
-    - Ativo: {selected_asset or 'Todos'}
-    - Contratos: {', '.join(selected_months)}
-    - Período: {min_year} - {max_year}
-    - Granularidade: {metric_options.get(granularity, granularity)}
-    - Total de observações: {len(processed_df):,}
-    - Períodos analisados: {len(seasonality_df)}
-    - Mínimo de amostras por bucket: {CONFIG['min_samples_per_bucket']}
+st.divider()
+
+# ============================================================
+# Insights Section
+# ============================================================
+st.markdown("## 💡 Insights Acionáveis")
+
+with st.container(border=True):
+    # Generate insights
+    insights = []
+
+    # Best opportunity
+    best_opp = seasonality_stats[
+        (seasonality_stats['retorno_medio'] > 0) &
+        (seasonality_stats['taxa_acerto'] > 55)
+    ].nlargest(1, 'sharpe_like')
+
+    if not best_opp.empty:
+        opp = best_opp.iloc[0]
+        insights.append(f"""
+        **🎯 Melhor Oportunidade de Compra:**
+        O {get_period_label(granularity, opp['periodo'])} apresenta retorno médio de **{opp['retorno_medio']:.2f}%**
+        com taxa de acerto de **{opp['taxa_acerto']:.1f}%** (baseado em {int(opp['observacoes'])} observações).
+        Sharpe-like: {opp['sharpe_like']:.2f}
+        """)
+
+    # Worst period
+    worst_opp = seasonality_stats[
+        (seasonality_stats['retorno_medio'] < 0) &
+        (seasonality_stats['taxa_acerto'] < 45)
+    ].nsmallest(1, 'sharpe_like')
+
+    if not worst_opp.empty:
+        opp = worst_opp.iloc[0]
+        insights.append(f"""
+        **⚠️ Período Mais Fraco:**
+        O {get_period_label(granularity, opp['periodo'])} historicamente apresenta retorno médio de **{opp['retorno_medio']:.2f}%**
+        com taxa de acerto de apenas **{opp['taxa_acerto']:.1f}%**.
+        Considere evitar posições compradas ou avaliar hedge neste período.
+        """)
+
+    # Most consistent
+    most_consistent = seasonality_stats.nlargest(1, 'consistencia').iloc[0]
+    insights.append(f"""
+    **✅ Período Mais Consistente:**
+    O {get_period_label(granularity, most_consistent['periodo'])} combina alta taxa de acerto
+    ({most_consistent['taxa_acerto']:.1f}%) com baixa volatilidade ({most_consistent['desvio_padrao']:.2f}%).
+    Ideal para estratégias de menor risco.
     """)
 
+    # Volatility insight
+    high_vol = seasonality_stats.nlargest(1, 'desvio_padrao').iloc[0]
+    insights.append(f"""
+    **📊 Período Mais Volátil:**
+    O {get_period_label(granularity, high_vol['periodo'])} tem a maior volatilidade
+    ({high_vol['desvio_padrao']:.2f}%), com retornos variando entre {high_vol['minimo']:.2f}% e {high_vol['maximo']:.2f}%.
+    Maior potencial de ganho, mas também maior risco.
+    """)
+
+    # Statistical significance
+    if HAS_SCIPY and 'significante' in seasonality_stats.columns:
+        sig_count = seasonality_stats['significante'].sum()
+        total_count = len(seasonality_stats)
+        insights.append(f"""
+        **📈 Robustez Estatística:**
+        {sig_count} de {total_count} períodos apresentam retorno estatisticamente significante (p < 0.05).
+        Isso indica que **{sig_count/total_count*100:.0f}%** dos padrões observados são estatisticamente robustos.
+        """)
+
+    # Display insights
+    for insight in insights:
+        st.info(insight)
+
+st.divider()
 
 # ============================================================
-# Run
+# Detailed Statistics Table
 # ============================================================
-if __name__ == "__main__":
-    main()
+st.markdown("## 📋 Estatísticas Detalhadas")
+
+with st.container(border=True):
+    # Prepare display table
+    display_stats = seasonality_stats.copy()
+    display_stats['periodo_label'] = display_stats['periodo'].apply(
+        lambda x: get_period_label(granularity, x)
+    )
+
+    display_cols = [
+        'periodo_label', 'retorno_medio', 'retorno_mediano', 'desvio_padrao',
+        'taxa_acerto', 'sharpe_like', 'minimo', 'maximo', 'observacoes'
+    ]
+
+    if HAS_SCIPY and 'p_valor' in display_stats.columns:
+        display_cols.append('p_valor')
+
+    display_table = display_stats[display_cols].copy()
+    display_table.columns = [
+        'Período', 'Ret. Médio (%)', 'Ret. Mediano (%)', 'Desvio Padrão (%)',
+        'Taxa Acerto (%)', 'Sharpe-like', 'Mín. (%)', 'Máx. (%)', 'Obs.'
+    ] + (['p-valor'] if HAS_SCIPY and 'p_valor' in display_stats.columns else [])
+
+    st.dataframe(
+        display_table.style.format({
+            'Ret. Médio (%)': '{:.2f}',
+            'Ret. Mediano (%)': '{:.2f}',
+            'Desvio Padrão (%)': '{:.2f}',
+            'Taxa Acerto (%)': '{:.1f}',
+            'Sharpe-like': '{:.2f}',
+            'Mín. (%)': '{:.2f}',
+            'Máx. (%)': '{:.2f}',
+            'Obs.': '{:.0f}',
+            'p-valor': '{:.3f}' if HAS_SCIPY else None
+        }).background_gradient(subset=['Ret. Médio (%)'], cmap='RdYlGn', vmin=-2, vmax=2),
+        use_container_width=True,
+        hide_index=True,
+        height=400
+    )
+
+st.divider()
+
+# ============================================================
+# Export
+# ============================================================
+st.markdown("## 📥 Exportar Dados")
+
+col_exp1, col_exp2 = st.columns(2)
+
+with col_exp1:
+    # Export statistics
+    export_stats = seasonality_stats.copy()
+    export_stats['periodo_label'] = export_stats['periodo'].apply(
+        lambda x: get_period_label(granularity, x)
+    )
+
+    csv_data = export_stats.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        "📥 Baixar Estatísticas (CSV)",
+        data=csv_data,
+        file_name=f"sazonalidade_{asset_label.replace(' ', '_')}_{granularity}_{start_date}_{end_date}.csv",
+        mime="text/csv",
+        key="download_stats"
+    )
+
+with col_exp2:
+    # Export insights as text
+    insights_text = f"""ANÁLISE DE SAZONALIDADE - {asset_label}
+{'='*60}
+
+Período: {start_date} a {end_date}
+Granularidade: {granularity_label}
+Total de Observações: {total_obs:,}
+
+{'='*60}
+INSIGHTS ACIONÁVEIS
+{'='*60}
+
+""" + "\n\n".join(insights)
+
+    st.download_button(
+        "📥 Baixar Insights (TXT)",
+        data=insights_text.encode('utf-8'),
+        file_name=f"insights_{asset_label.replace(' ', '_')}_{granularity}_{start_date}_{end_date}.txt",
+        mime="text/plain",
+        key="download_insights"
+    )
+
+# Footer
+st.divider()
+st.caption(f"""
+📊 **Resumo da Análise:**
+Ativo: {asset_label} | Período: {start_date} a {end_date} | Granularidade: {granularity_label} |
+Total: {total_obs:,} observações em {len(seasonality_stats)} períodos
+""")
