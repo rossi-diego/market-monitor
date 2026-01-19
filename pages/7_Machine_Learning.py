@@ -45,10 +45,19 @@ try:
 except ImportError:
     HAS_LGBM = False
 
+try:
+    from catboost import CatBoostRegressor
+    HAS_CATBOOST = True
+except ImportError:
+    HAS_CATBOOST = False
+
+from sklearn.ensemble import AdaBoostRegressor, ExtraTreesRegressor
+
 from src.data_pipeline import df
 from src.utils import apply_theme, date_range_picker
 from src.asset_config import ASSETS_MAP, categorized_asset_picker
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # Theme
 apply_theme()
@@ -70,6 +79,52 @@ BASE = BASE.sort_values("date").reset_index(drop=True)
 valid_asset_cols = [col for col in BASE.columns if col in ASSETS_MAP.values()]
 valid_cols = ["date"] + valid_asset_cols
 BASE = BASE[valid_cols]
+
+# ============================================================
+# Helper Functions
+# ============================================================
+def add_technical_features(df, target_col, feature_cols):
+    """Add technical indicators as features."""
+    df_enhanced = df.copy()
+
+    # Returns (daily percentage change)
+    for col in [target_col] + feature_cols:
+        if col in df_enhanced.columns:
+            df_enhanced[f"{col}_return"] = df_enhanced[col].pct_change() * 100
+
+    # Moving averages (5, 10, 20 days)
+    for col in [target_col]:
+        if col in df_enhanced.columns:
+            df_enhanced[f"{col}_ma5"] = df_enhanced[col].rolling(window=5).mean()
+            df_enhanced[f"{col}_ma10"] = df_enhanced[col].rolling(window=10).mean()
+            df_enhanced[f"{col}_ma20"] = df_enhanced[col].rolling(window=20).mean()
+
+    # Volatility (rolling std of returns)
+    for col in [target_col]:
+        if f"{col}_return" in df_enhanced.columns:
+            df_enhanced[f"{col}_vol10"] = df_enhanced[f"{col}_return"].rolling(window=10).std()
+
+    return df_enhanced
+
+
+def calculate_feature_importance_score(df, target_col, feature_cols):
+    """Calculate correlation-based importance scores for features."""
+    scores = {}
+
+    target_data = df[target_col].dropna()
+
+    for col in feature_cols:
+        if col != target_col and col in df.columns:
+            try:
+                # Calculate correlation
+                corr_data = df[[target_col, col]].dropna()
+                if len(corr_data) > 10:
+                    corr = abs(corr_data.corr().iloc[0, 1])
+                    scores[col] = corr
+            except:
+                pass
+
+    return scores
 
 # ============================================================
 # Explanation Expander
@@ -120,103 +175,50 @@ with st.expander("📘 Como funciona o modelo de Machine Learning?", expanded=Fa
 st.divider()
 
 # ============================================================
-# Configuration Section
+# Configuration Section with Tabs
 # ============================================================
 st.markdown("## ⚙️ Configuração do Modelo")
 
-# Container 1: Target and Features
-with st.container(border=True):
-    st.markdown("### 🎯 Dados de Entrada")
+tab_config, tab_features, tab_advanced = st.tabs(["🎯 Target & Modelo", "📊 Features & Engenharia", "⚙️ Avançado"])
 
-    # Get valid columns (only continuation contracts)
-    valid_cols_raw = [c for c in BASE.columns if c not in ["date"] and BASE[c].dtype != "object"]
+# Get valid columns (only continuation contracts)
+valid_cols_raw = [c for c in BASE.columns if c not in ["date"] and BASE[c].dtype != "object"]
+reverse_map = {col: label for label, col in ASSETS_MAP.items()}
 
-    st.markdown("#### Ativo Target (a ser previsto)")
-    target_col, target_label = categorized_asset_picker(
-        BASE,
-        state_key="ml_target",
-        show_favorites=True,
-    )
+# ============================================================
+# TAB 1: Target & Model Selection
+# ============================================================
+with tab_config:
+    with st.container(border=True):
+        st.markdown("### 🎯 Ativo Target")
 
-    st.markdown("#### Features (variáveis explicativas)")
+        target_col, target_label = categorized_asset_picker(
+            BASE,
+            state_key="ml_target",
+            show_favorites=True,
+        )
 
-    # Calculate correlation with target to suggest best features
-    default_features = []
-    correlations = {}
+    with st.container(border=True):
+        st.markdown("### 🤖 Seleção de Modelo(s)")
 
-    if target_col:
-        for col in valid_cols_raw:
-            if col != target_col:
-                try:
-                    # Calculate absolute correlation
-                    corr_data = BASE[[target_col, col]].dropna()
-                    if len(corr_data) > 10:
-                        corr = corr_data.corr().iloc[0, 1]
-                        correlations[col] = abs(corr)
-                except:
-                    pass
+        col_mode, col_model = st.columns([1, 2])
 
-        # Get top 5 features by correlation
-        if correlations:
-            sorted_features = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
-            default_features = [feat[0] for feat in sorted_features[:5]]
+        with col_mode:
+            comparison_mode = st.checkbox(
+                "Comparar múltiplos modelos",
+                value=False,
+                help="Compare o desempenho de todos os modelos disponíveis de uma vez"
+            )
 
-    # If no correlations found, use first 3
-    if not default_features:
-        default_features = [c for c in valid_cols_raw if c != target_col][:3]
-
-    # Create reverse map for labels
-    reverse_map = {col: label for label, col in ASSETS_MAP.items()}
-
-    # Get labels for features
-    feature_options_labels = [reverse_map.get(col, col) for col in valid_cols_raw if col != target_col]
-    feature_options_cols = [col for col in valid_cols_raw if col != target_col]
-
-    # Default features as labels
-    default_features_labels = [reverse_map.get(col, col) for col in default_features]
-
-    selected_features_labels = st.multiselect(
-        "Selecione as features",
-        options=feature_options_labels,
-        default=default_features_labels,
-        help="💡 As 5 features mais correlacionadas com o target são selecionadas por padrão"
-    )
-
-    # Convert labels back to columns
-    label_to_col = {label: col for col, label in reverse_map.items()}
-    feature_cols = [label_to_col.get(label, label) for label in selected_features_labels]
-
-    # Show correlation info
-    if feature_cols and target_col and correlations:
-        with st.expander(f"📊 Correlação das Features com {target_label}", expanded=False):
-            # Show correlations for selected features
-            selected_corrs = [(reverse_map.get(f, f), correlations.get(f, 0)) for f in feature_cols if f in correlations]
-            selected_corrs.sort(key=lambda x: x[1], reverse=True)
-
-            st.markdown("**Features Selecionadas (ordenadas por correlação):**")
-            for i, (feat_label, corr) in enumerate(selected_corrs, 1):
-                corr_strength = "Forte" if corr > 0.7 else "Moderada" if corr > 0.4 else "Fraca"
-                corr_color = "🟢" if corr > 0.7 else "🟡" if corr > 0.4 else "🔴"
-                st.caption(f"{i}. **{feat_label}**: {corr:.3f} {corr_color} ({corr_strength})")
-
-    # At least 1 feature or lag must exist
-    if len(feature_cols) == 0:
-        st.info("💡 Dica: Selecione features ou configure lags abaixo para treinar o modelo.")
-
-# Container 2: Model Configuration
-with st.container(border=True):
-    st.markdown("### 🤖 Configuração do Algoritmo")
-
-    col_model, col_lags, col_horizon = st.columns(3)
-
-    with col_model:
         # Build models dictionary with better organization
         models_dict = {
             "Ridge Regression": Ridge(alpha=1.0, random_state=42),
             "Lasso Regression": Lasso(alpha=0.01, random_state=42, max_iter=2000),
             "Elastic Net": ElasticNet(alpha=0.01, l1_ratio=0.5, random_state=42, max_iter=2000),
             "Random Forest": RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42, n_jobs=-1),
+            "Extra Trees": ExtraTreesRegressor(n_estimators=300, max_depth=10, random_state=42, n_jobs=-1),
             "Gradient Boosting": GradientBoostingRegressor(n_estimators=200, learning_rate=0.05, max_depth=5, random_state=42),
+            "AdaBoost": AdaBoostRegressor(n_estimators=100, learning_rate=0.05, random_state=42),
         }
 
         if HAS_XGB:
@@ -241,84 +243,271 @@ with st.container(border=True):
                 force_col_wise=True
             )
 
-        model_label = st.selectbox(
-            "Algoritmo",
-            list(models_dict.keys()),
-            index=0,
-            help="Escolha o algoritmo de ML para treinar"
+        if HAS_CATBOOST:
+            models_dict["CatBoost"] = CatBoostRegressor(
+                n_estimators=300,
+                learning_rate=0.05,
+                depth=6,
+                random_state=42,
+                verbose=False
+            )
+
+        with col_model:
+            if not comparison_mode:
+                model_label = st.selectbox(
+                    "Algoritmo",
+                    list(models_dict.keys()),
+                    index=0,
+                    help="Escolha o algoritmo de ML para treinar"
+                )
+
+                # Model description
+                model_descriptions = {
+                    "Ridge Regression": "✅ Rápido e estável\n✅ Bom para relações lineares\n⚠️ Não captura não-linearidades",
+                    "Lasso Regression": "✅ Seleção automática de features\n✅ Interpretável\n⚠️ Pode ser instável",
+                    "Elastic Net": "✅ Combina Ridge + Lasso\n✅ Equilibrado\n⚠️ Requer tuning",
+                    "Random Forest": "✅ Robusto e preciso\n✅ Captura não-linearidades\n✅ Menos overfitting",
+                    "Extra Trees": "✅ Mais rápido que RF\n✅ Maior aleatoriedade\n✅ Boa generalização",
+                    "Gradient Boosting": "✅ Alta precisão\n✅ Padrões complexos\n⚠️ Mais lento",
+                    "AdaBoost": "✅ Simples e eficaz\n✅ Bom com weak learners\n⚠️ Sensível a outliers",
+                    "XGBoost": "✅ Estado da arte\n✅ Excelente performance\n✅ Rápido e eficiente",
+                    "LightGBM": "✅ Mais rápido que XGBoost\n✅ Eficiente em memória\n✅ Ótima precisão",
+                    "CatBoost": "✅ Melhor precisão\n✅ Robust a overfitting\n✅ Handles missing values",
+                }
+                st.caption(model_descriptions.get(model_label, ""))
+
+                models_to_train = {model_label: models_dict[model_label]}
+            else:
+                st.info(f"🔄 Modo de comparação ativado: Todos os {len(models_dict)} modelos serão treinados")
+                models_to_train = models_dict.copy()
+
+    with st.container(border=True):
+        st.markdown("### 📅 Configurações Temporais")
+
+        col_lags, col_horizon = st.columns(2)
+
+        with col_lags:
+            num_lags = st.slider(
+                "Número de lags",
+                min_value=0,
+                max_value=10,
+                value=3,
+                step=1,
+                help="Valores históricos do target: lag1=ontem, lag2=anteontem, etc."
+            )
+            if num_lags > 0:
+                st.caption(f"✓ Usando {num_lags} valores históricos")
+            else:
+                st.caption("✓ Apenas features externas")
+
+        with col_horizon:
+            horizon = st.slider(
+                "Dias à frente",
+                min_value=1,
+                max_value=60,
+                value=30,
+                help="Quantidade de dias futuros a prever"
+            )
+            st.caption(f"🔮 Prevendo {horizon} dias")
+
+# ============================================================
+# TAB 2: Feature Selection & Engineering
+# ============================================================
+with tab_features:
+    with st.container(border=True):
+        st.markdown("### 🔍 Seleção de Features")
+
+        # Calculate correlations with target
+        correlations = {}
+        if target_col:
+            for col in valid_cols_raw:
+                if col != target_col:
+                    try:
+                        corr_data = BASE[[target_col, col]].dropna()
+                        if len(corr_data) > 10:
+                            corr = corr_data.corr().iloc[0, 1]
+                            correlations[col] = abs(corr)
+                    except:
+                        pass
+
+        # Smart feature selection methods
+        st.markdown("#### Método de Seleção")
+        selection_method = st.radio(
+            "Como selecionar features?",
+            ["🎯 Automático (Top N)", "✋ Manual", "🔝 Por threshold de correlação"],
+            help="Escolha como selecionar as features para o modelo"
         )
-        model = models_dict[model_label]
 
-        # Model description
-        model_descriptions = {
-            "Ridge Regression": "✅ Rápido e estável\n✅ Bom para relações lineares\n⚠️ Não captura não-linearidades",
-            "Lasso Regression": "✅ Seleção automática de features\n✅ Interpretável\n⚠️ Pode ser instável",
-            "Elastic Net": "✅ Combina Ridge + Lasso\n✅ Equilibrado\n⚠️ Requer tuning",
-            "Random Forest": "✅ Robusto e preciso\n✅ Captura não-linearidades\n✅ Menos overfitting",
-            "Gradient Boosting": "✅ Alta precisão\n✅ Padrões complexos\n⚠️ Mais lento",
-            "XGBoost": "✅ Estado da arte\n✅ Excelente performance\n✅ Rápido e eficiente",
-            "LightGBM": "✅ Mais rápido que XGBoost\n✅ Eficiente em memória\n✅ Ótima precisão",
-        }
-        st.caption(model_descriptions.get(model_label, ""))
+        feature_cols = []
 
-    with col_lags:
-        num_lags = st.slider(
-            "Número de lags",
-            min_value=0,
-            max_value=3,
-            value=0,
-            step=1,
-            help="Valores históricos do target: lag1=ontem, lag2=anteontem, etc."
+        if selection_method == "🎯 Automático (Top N)":
+            num_features = st.slider(
+                "Número de features",
+                min_value=1,
+                max_value=min(20, len(correlations)),
+                value=min(5, len(correlations)),
+                help="Seleciona automaticamente as N features mais correlacionadas"
+            )
+
+            if correlations:
+                sorted_features = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
+                feature_cols = [feat[0] for feat in sorted_features[:num_features]]
+
+                st.success(f"✅ Selecionadas {len(feature_cols)} features automaticamente")
+
+        elif selection_method == "✋ Manual":
+            # Get top 5 as default
+            default_features = []
+            if correlations:
+                sorted_features = sorted(correlations.items(), key=lambda x: x[1], reverse=True)
+                default_features = [feat[0] for feat in sorted_features[:5]]
+
+            # Get labels for features
+            feature_options_labels = [reverse_map.get(col, col) for col in valid_cols_raw if col != target_col]
+            default_features_labels = [reverse_map.get(col, col) for col in default_features]
+
+            selected_features_labels = st.multiselect(
+                "Selecione as features manualmente",
+                options=feature_options_labels,
+                default=default_features_labels,
+                help="💡 As 5 features mais correlacionadas estão pré-selecionadas"
+            )
+
+            # Convert labels back to columns
+            label_to_col = {label: col for col, label in reverse_map.items()}
+            feature_cols = [label_to_col.get(label, label) for label in selected_features_labels]
+
+        else:  # Threshold method
+            corr_threshold = st.slider(
+                "Threshold de correlação",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.3,
+                step=0.05,
+                help="Seleciona apenas features com |correlação| >= threshold"
+            )
+
+            if correlations:
+                feature_cols = [col for col, corr in correlations.items() if corr >= corr_threshold]
+                st.success(f"✅ {len(feature_cols)} features com correlação >= {corr_threshold:.2f}")
+
+    # Show correlation matrix for selected features
+    if feature_cols and len(feature_cols) > 0:
+        with st.expander(f"📊 Matriz de Correlação das Features Selecionadas ({len(feature_cols)} features)", expanded=False):
+            # Show correlations for selected features
+            selected_corrs = [(reverse_map.get(f, f), correlations.get(f, 0)) for f in feature_cols if f in correlations]
+            selected_corrs.sort(key=lambda x: x[1], reverse=True)
+
+            col_list, col_viz = st.columns([1, 2])
+
+            with col_list:
+                st.markdown("**Features (ordenadas por correlação com target):**")
+                for i, (feat_label, corr) in enumerate(selected_corrs, 1):
+                    corr_strength = "Forte" if corr > 0.7 else "Moderada" if corr > 0.4 else "Fraca"
+                    corr_color = "🟢" if corr > 0.7 else "🟡" if corr > 0.4 else "🔴"
+                    st.caption(f"{i}. **{feat_label}**: {corr:.3f} {corr_color} ({corr_strength})")
+
+            with col_viz:
+                # Create simple correlation bar chart
+                fig_corr = go.Figure()
+
+                fig_corr.add_trace(
+                    go.Bar(
+                        x=[corr for _, corr in selected_corrs],
+                        y=[label for label, _ in selected_corrs],
+                        orientation='h',
+                        marker=dict(
+                            color=[corr for _, corr in selected_corrs],
+                            colorscale='RdYlGn',
+                            showscale=False,
+                            cmin=0,
+                            cmax=1
+                        ),
+                    )
+                )
+
+                fig_corr.update_layout(
+                    title="Correlação com Target",
+                    xaxis_title="Correlação Absoluta",
+                    yaxis_title="",
+                    height=max(300, len(selected_corrs) * 25),
+                    yaxis=dict(autorange="reversed"),
+                    margin=dict(l=200, r=20, t=40, b=40)
+                )
+
+                st.plotly_chart(fig_corr, use_container_width=True)
+
+    # Feature engineering toggle
+    with st.container(border=True):
+        st.markdown("### 🔧 Engenharia de Features")
+
+        add_tech_features = st.checkbox(
+            "Adicionar indicadores técnicos",
+            value=False,
+            help="Adiciona automaticamente: retornos diários, médias móveis (5/10/20), volatilidade rolling"
         )
-        if num_lags > 0:
-            st.caption(f"✓ Usando {num_lags} valores históricos")
-        else:
-            st.caption("✓ Apenas features externas")
 
-    with col_horizon:
-        horizon = st.slider(
-            "Dias à frente",
-            min_value=1,
-            max_value=45,
-            value=30,
-            help="Quantidade de dias futuros a prever"
-        )
-        st.caption(f"🔮 Prevendo {horizon} dias")
+        if add_tech_features:
+            st.info("""
+            ✅ **Features técnicas que serão adicionadas:**
+            - 📈 Retornos diários (%) para target e features
+            - 📊 Médias móveis 5/10/20 dias do target
+            - 📉 Volatilidade rolling (10 dias) do target
+            """)
 
-# Container 3: Advanced Settings
-with st.container(border=True):
-    st.markdown("### ⚙️ Configurações Avançadas")
+    # At least 1 feature or lag must exist
+    if len(feature_cols) == 0 and num_lags == 0:
+        st.warning("⚠️ Selecione ao menos uma feature ou configure lags para treinar o modelo.")
 
-    col_norm, col_period = st.columns([1, 2])
+# ============================================================
+# TAB 3: Advanced Settings
+# ============================================================
+with tab_advanced:
+    with st.container(border=True):
+        st.markdown("### 📅 Período de Treinamento")
 
-    with col_norm:
-        normalize = st.checkbox(
-            "Normalizar dados (StandardScaler)",
-            value=True,
-            help="Recomendado: padroniza features para média=0 e std=1"
-        )
-        if normalize:
-            st.caption("✓ Normalização ativada")
-        else:
-            st.caption("⚠️ Usando escala original")
-
-    with col_period:
         start_model_date, end_model_date = date_range_picker(
             BASE["date"],
             state_key="ml_train_range",
             default_days=365 * 3,
         )
 
-    mask_model = (BASE["date"].dt.date >= start_model_date) & (
-        BASE["date"].dt.date <= end_model_date
-    )
-    BASE_RANGE = BASE.loc[mask_model].copy()
+    with st.container(border=True):
+        st.markdown("### ⚙️ Configurações de Treinamento")
 
-    if BASE_RANGE.empty:
-        st.error("❌ Sem dados no período selecionado para treinar o modelo.")
-        st.stop()
+        col_norm, col_split = st.columns(2)
 
-    st.caption(f"📊 Usando {len(BASE_RANGE)} dias de dados históricos ({start_model_date} a {end_model_date})")
+        with col_norm:
+            normalize = st.checkbox(
+                "Normalizar dados (StandardScaler)",
+                value=True,
+                help="Recomendado: padroniza features para média=0 e std=1"
+            )
+            if normalize:
+                st.caption("✓ Normalização ativada")
+            else:
+                st.caption("⚠️ Usando escala original")
+
+        with col_split:
+            train_split = st.slider(
+                "% Dados de treinamento",
+                min_value=60,
+                max_value=90,
+                value=80,
+                step=5,
+                help="Percentual dos dados para treino (resto vai para teste)"
+            )
+            st.caption(f"✓ {train_split}% treino / {100-train_split}% teste")
+
+# Apply date range filter
+mask_model = (BASE["date"].dt.date >= start_model_date) & (BASE["date"].dt.date <= end_model_date)
+BASE_RANGE = BASE.loc[mask_model].copy()
+
+if BASE_RANGE.empty:
+    st.error("❌ Sem dados no período selecionado para treinar o modelo.")
+    st.stop()
+
+st.caption(f"📊 Usando {len(BASE_RANGE)} dias de dados históricos ({start_model_date} a {end_model_date})")
 
 # Check if we have enough features
 if len(feature_cols) == 0 and num_lags == 0:
@@ -331,41 +520,65 @@ st.divider()
 # ============================================================
 # Prepare dataset (lags + features)
 # ============================================================
-df_ml = BASE_RANGE[["date", target_col] + feature_cols].copy()
+st.markdown("## 🔄 Preparação dos Dados")
 
-# Ensure date column is datetime type
-df_ml["date"] = pd.to_datetime(df_ml["date"], errors="coerce")
+with st.spinner("Preparando dados e aplicando engenharia de features..."):
+    # Start with base columns
+    df_ml = BASE_RANGE[["date", target_col] + feature_cols].copy()
 
-# Generate lag columns (on target)
-for lag in range(1, num_lags + 1):
-    df_ml[f"{target_col}_lag{lag}"] = df_ml[target_col].shift(lag)
+    # Ensure date column is datetime type
+    df_ml["date"] = pd.to_datetime(df_ml["date"], errors="coerce")
 
-# Drop rows with NaN caused by lags or missing features
-df_ml = df_ml.dropna().reset_index(drop=True)
+    # Apply feature engineering if requested
+    if add_tech_features:
+        df_ml = add_technical_features(df_ml, target_col, feature_cols)
+        st.success(f"✅ Features técnicas adicionadas. Dataset expandido para {len(df_ml.columns)-2} features totais")
 
-if df_ml.empty:
-    st.error("Dados insuficientes após aplicar lags e filtrar NaNs.")
-    st.stop()
+    # Generate lag columns (on target)
+    if num_lags > 0:
+        for lag in range(1, num_lags + 1):
+            df_ml[f"{target_col}_lag{lag}"] = df_ml[target_col].shift(lag)
+        st.success(f"✅ {num_lags} lags criados para o target")
 
-# Build X, y
-X = df_ml.drop(columns=["date", target_col])
-y = df_ml[target_col]
+    # Drop rows with NaN caused by lags or missing features
+    df_ml = df_ml.dropna().reset_index(drop=True)
 
-feature_names = X.columns.tolist()
+    if df_ml.empty:
+        st.error("❌ Dados insuficientes após aplicar lags e filtrar NaNs.")
+        st.stop()
 
-# Train-test split (80/20, temporal)
-split = int(len(df_ml) * 0.80)
-X_train_raw, X_test_raw = X.iloc[:split].copy(), X.iloc[split:].copy()
-y_train_raw, y_test_raw = y.iloc[:split].copy(), y.iloc[split:].copy()
-dates_test = df_ml["date"].iloc[split:]
+    # Build X, y
+    X = df_ml.drop(columns=["date", target_col])
+    y = df_ml[target_col]
 
-# Scalers (only if normalize=True)
+    feature_names = X.columns.tolist()
+
+    # Train-test split (temporal)
+    split = int(len(df_ml) * (train_split / 100))
+    X_train_raw, X_test_raw = X.iloc[:split].copy(), X.iloc[split:].copy()
+    y_train_raw, y_test_raw = y.iloc[:split].copy(), y.iloc[split:].copy()
+    dates_test = df_ml["date"].iloc[split:]
+
+    st.info(f"""
+    📊 **Dataset preparado com sucesso:**
+    - Total de samples: {len(df_ml)}
+    - Features finais: {len(feature_names)}
+    - Treino: {len(X_train_raw)} samples ({train_split}%)
+    - Teste: {len(X_test_raw)} samples ({100-train_split}%)
+    """)
+
+# ============================================================
+# Train Model(s)
+# ============================================================
+st.divider()
+st.markdown("## 🤖 Treinamento do(s) Modelo(s)")
+
+# Prepare scalers
 x_scaler = None
 y_scaler = None
 
 if normalize:
     x_scaler = StandardScaler()
-    # Keep as DataFrame to preserve column names
     X_train = pd.DataFrame(
         x_scaler.fit_transform(X_train_raw),
         columns=X_train_raw.columns,
@@ -378,166 +591,308 @@ if normalize:
     )
 
     y_scaler = StandardScaler()
-    y_train_scaled = y_scaler.fit_transform(
-        y_train_raw.values.reshape(-1, 1)
-    ).ravel()
-
-    # Fit on normalized data
-    model.fit(X_train, y_train_scaled)
-
-    # Predict on normalized space, then invert back to original scale
-    pred_test_scaled = model.predict(X_test)
-    pred_test = y_scaler.inverse_transform(
-        pred_test_scaled.reshape(-1, 1)
-    ).ravel()
-
-    y_test_true = y_test_raw.copy()
-
+    y_train_scaled = y_scaler.fit_transform(y_train_raw.values.reshape(-1, 1)).ravel()
+    y_train = y_train_scaled
+    y_test = y_test_raw.copy()
 else:
-    # No normalization: use raw values directly
-    X_train = X_train_raw
-    X_test = X_test_raw
-    y_train = y_train_raw
+    X_train = X_train_raw.copy()
+    X_test = X_test_raw.copy()
+    y_train = y_train_raw.copy()
+    y_test = y_test_raw.copy()
 
-    model.fit(X_train, y_train)
-    pred_test = model.predict(X_test)
-    y_test_true = y_test_raw.copy()
+# Train models
+trained_models = {}
+model_predictions = {}
+model_metrics = {}
+
+progress_bar = st.progress(0)
+status_text = st.empty()
+
+for idx, (model_name, model) in enumerate(models_to_train.items()):
+    status_text.text(f"Treinando {model_name}... ({idx+1}/{len(models_to_train)})")
+
+    try:
+        # Train model
+        model.fit(X_train, y_train)
+
+        # Predict
+        if normalize and y_scaler is not None:
+            pred_test_scaled = model.predict(X_test)
+            pred_test = y_scaler.inverse_transform(pred_test_scaled.reshape(-1, 1)).ravel()
+        else:
+            pred_test = model.predict(X_test)
+
+        # Store results
+        trained_models[model_name] = model
+        model_predictions[model_name] = pred_test
+
+        # Calculate metrics
+        mae = mean_absolute_error(y_test, pred_test)
+        rmse = np.sqrt(mean_squared_error(y_test, pred_test))
+        r2 = r2_score(y_test, pred_test)
+
+        # MAPE
+        mask = y_test != 0
+        if mask.sum() > 0:
+            mape = np.mean(np.abs((y_test[mask] - pred_test[mask]) / y_test[mask])) * 100
+        else:
+            mape = np.inf
+
+        # MASE
+        naive_error = np.mean(np.abs(np.diff(y_test.values)))
+        mase = mae / (naive_error + 1e-8) if naive_error > 0 else np.inf
+
+        model_metrics[model_name] = {
+            'MAE': mae,
+            'RMSE': rmse,
+            'R2': r2,
+            'MAPE': mape,
+            'MASE': mase
+        }
+
+    except Exception as e:
+        st.warning(f"⚠️ Erro ao treinar {model_name}: {str(e)}")
+        continue
+
+    progress_bar.progress((idx + 1) / len(models_to_train))
+
+status_text.text("✅ Treinamento concluído!")
+progress_bar.empty()
+
+if not trained_models:
+    st.error("❌ Nenhum modelo foi treinado com sucesso.")
+    st.stop()
+
+# Select best model for single mode or show comparison
+if comparison_mode:
+    st.success(f"✅ {len(trained_models)} modelos treinados com sucesso!")
+else:
+    model_label = list(trained_models.keys())[0]
+    model = trained_models[model_label]
+    pred_test = model_predictions[model_label]
+    y_test_true = y_test.copy()
+    st.success(f"✅ Modelo {model_label} treinado com sucesso!")
 
 # ============================================================
 # Show metrics with professional cards
 # ============================================================
-st.markdown("## 📊 Performance do Modelo")
+st.divider()
 
-with st.container(border=True):
-    st.markdown("### 🎯 Métricas de Erro (Conjunto de Teste)")
+if comparison_mode:
+    # ============================================================
+    # MODEL COMPARISON MODE
+    # ============================================================
+    st.markdown("## 📊 Comparação de Modelos")
 
-    # Calculate all metrics
-    mae = mean_absolute_error(y_test_true, pred_test)
-    rmse = np.sqrt(mean_squared_error(y_test_true, pred_test))
-    r2 = r2_score(y_test_true, pred_test)
+    # Create comparison dataframe
+    comparison_df = pd.DataFrame(model_metrics).T
+    comparison_df = comparison_df.sort_values('R2', ascending=False)
 
-    # MAPE calculation (handling division by zero properly)
-    def safe_mape(y_true, y_pred):
-        """Calculate MAPE with proper handling of edge cases."""
-        if len(y_true) == 0:
-            return None
+    # Display comparison table
+    with st.container(border=True):
+        st.markdown("### 🏆 Ranking de Modelos (por R²)")
 
-        # Avoid division by zero
-        mask = y_true != 0
-        if mask.sum() == 0:
-            return None
+        # Format for display
+        display_df = comparison_df.copy()
+        display_df['MAE'] = display_df['MAE'].apply(lambda x: f"{x:.2f}")
+        display_df['RMSE'] = display_df['RMSE'].apply(lambda x: f"{x:.2f}")
+        display_df['R2'] = display_df['R2'].apply(lambda x: f"{x:.3f}")
+        display_df['MAPE'] = display_df['MAPE'].apply(lambda x: f"{x:.1f}%" if not np.isinf(x) else "N/A")
+        display_df['MASE'] = display_df['MASE'].apply(lambda x: f"{x:.2f}" if not np.isinf(x) else "N/A")
 
-        mape_val = np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
-        return mape_val
-
-    mape = safe_mape(y_test_true.values, pred_test)
-
-    # Additional metrics: MASE (Mean Absolute Scaled Error)
-    naive_error = np.mean(np.abs(np.diff(y_test_true.values)))
-    mase = mae / (naive_error + 1e-8) if naive_error > 0 else np.inf
-
-    # Mean of actual values for context
-    y_mean = y_test_true.mean()
-
-    # Display metrics in columns
-    col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
-
-    with col_m1:
-        mae_pct = (mae / y_mean * 100) if y_mean != 0 else 0
-        mae_color = "🟢" if mae_pct < 3 else "🟡" if mae_pct < 7 else "🔴"
-        st.metric(
-            "MAE",
-            f"{mae:.2f}",
-            f"{mae_color} {mae_pct:.1f}%",
-            help="Erro médio absoluto em unidades do preço"
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            height=min(400, (len(display_df) + 1) * 35)
         )
 
-    with col_m2:
-        rmse_pct = (rmse / y_mean * 100) if y_mean != 0 else 0
-        rmse_color = "🟢" if rmse_pct < 5 else "🟡" if rmse_pct < 10 else "🔴"
-        st.metric(
-            "RMSE",
-            f"{rmse:.2f}",
-            f"{rmse_color} {rmse_pct:.1f}%",
-            help="Raiz do erro quadrático médio (penaliza grandes erros)"
-        )
+    # Visual comparison charts
+    col_chart1, col_chart2 = st.columns(2)
 
-    with col_m3:
-        r2_color = "🟢" if r2 > 0.7 else "🟡" if r2 > 0.3 else "🔴"
-        r2_pct = r2 * 100 if r2 > 0 else 0
-        st.metric(
-            "R²",
-            f"{r2:.3f}",
-            f"{r2_color} {r2_pct:.1f}%",
-            help="Coeficiente de determinação (% explicada)"
-        )
-
-    with col_m4:
-        if mape is not None and not np.isinf(mape):
-            mape_color = "🟢" if mape < 5 else "🟡" if mape < 10 else "🔴"
-            st.metric(
-                "MAPE",
-                f"{mape:.1f}%",
-                f"{mape_color}",
-                help="Erro percentual médio absoluto"
+    with col_chart1:
+        # MAE comparison
+        fig_mae = go.Figure()
+        fig_mae.add_trace(
+            go.Bar(
+                x=list(comparison_df.index),
+                y=comparison_df['MAE'],
+                marker=dict(
+                    color=comparison_df['MAE'],
+                    colorscale='RdYlGn_r',
+                    showscale=False
+                ),
+                text=comparison_df['MAE'].round(2),
+                textposition='outside',
             )
-        else:
-            st.metric("MAPE", "N/A", help="Não calculável")
+        )
+        fig_mae.update_layout(
+            title="MAE por Modelo (menor = melhor)",
+            xaxis_title="Modelo",
+            yaxis_title="MAE",
+            height=400
+        )
+        st.plotly_chart(fig_mae, use_container_width=True)
 
-    with col_m5:
-        if not np.isinf(mase):
-            mase_color = "🟢" if mase < 1.0 else "🟡" if mase < 1.5 else "🔴"
-            st.metric(
-                "MASE",
-                f"{mase:.2f}",
-                f"{mase_color}",
-                help="Erro escalado pelo naive forecast (< 1.0 = melhor que naive)"
+    with col_chart2:
+        # R² comparison
+        fig_r2 = go.Figure()
+        fig_r2.add_trace(
+            go.Bar(
+                x=list(comparison_df.index),
+                y=comparison_df['R2'],
+                marker=dict(
+                    color=comparison_df['R2'],
+                    colorscale='RdYlGn',
+                    showscale=False,
+                    cmin=0,
+                    cmax=1
+                ),
+                text=comparison_df['R2'].round(3),
+                textposition='outside',
             )
-        else:
-            st.metric("MASE", "N/A", help="Erro escalado")
+        )
+        fig_r2.update_layout(
+            title="R² por Modelo (maior = melhor)",
+            xaxis_title="Modelo",
+            yaxis_title="R²",
+            height=400
+        )
+        st.plotly_chart(fig_r2, use_container_width=True)
 
-    # Interpretation guide
-    with st.expander("📖 Como interpretar as métricas"):
-        st.markdown(f"""
-        ### Contexto
-        - **Média do target**: {y_mean:.2f}
-        - **Desvio padrão**: {y_test_true.std():.2f}
-        - **Samples no teste**: {len(y_test_true)}
+    # Best model selection
+    best_model_name = comparison_df.index[0]
+    st.success(f"🏆 **Melhor modelo (por R²):** {best_model_name} com R² = {comparison_df.loc[best_model_name, 'R2']:.3f}")
 
-        ### Interpretação por Métrica
+    # Use best model for forecast
+    model = trained_models[best_model_name]
+    model_label = best_model_name
+    pred_test = model_predictions[best_model_name]
+    y_test_true = y_test.copy()
 
-        **MAE (Mean Absolute Error)**
-        - Erro médio: {mae:.2f} unidades ({mae_pct:.1f}% da média)
-        - {"✅ Excelente!" if mae_pct < 3 else "⚠️ Moderado" if mae_pct < 7 else "❌ Alto"}
-        - Significa que, em média, o modelo erra {mae:.2f} unidades
+    # Calculate residuals for best model
+    residuals = y_test_true.values - pred_test
 
-        **RMSE (Root Mean Squared Error)**
-        - RMSE: {rmse:.2f} ({rmse_pct:.1f}% da média)
-        - Penaliza outliers e erros grandes mais fortemente
-        - {"✅ Bom desempenho" if rmse_pct < 5 else "⚠️ Aceitável" if rmse_pct < 10 else "❌ Revisar modelo"}
+else:
+    # ============================================================
+    # SINGLE MODEL MODE
+    # ============================================================
+    st.markdown("## 📊 Performance do Modelo")
 
-        **R² (Coefficient of Determination)**
-        - R²: {r2:.3f} ({r2_pct:.1f}% da variância explicada)
-        - {"✅ Modelo forte" if r2 > 0.7 else "⚠️ Modelo moderado" if r2 > 0.3 else "❌ Modelo fraco" if r2 > 0 else "❌ Pior que baseline (média)"}
-        - {f"Explica {r2_pct:.0f}% da variabilidade dos dados" if r2 > 0 else "Não consegue melhorar a baseline"}
+    with st.container(border=True):
+        st.markdown("### 🎯 Métricas de Erro (Conjunto de Teste)")
 
-        **MAPE (Mean Absolute Percentage Error)**
-        - {f"MAPE: {mape:.1f}%" if mape and not np.isinf(mape) else "N/A"}
-        - {f"✅ Excelente precisão" if mape and mape < 5 else f"⚠️ Precisão moderada" if mape and mape < 10 else f"❌ Baixa precisão" if mape else "N/A"}
-        - Erro em % do valor real (mais comparável entre diferentes escalas)
+        # Get metrics from stored results
+        mae = model_metrics[model_label]['MAE']
+        rmse = model_metrics[model_label]['RMSE']
+        r2 = model_metrics[model_label]['R2']
+        mape = model_metrics[model_label]['MAPE']
+        mase = model_metrics[model_label]['MASE']
 
-        **MASE (Mean Absolute Scaled Error)**
-        - {f"MASE: {mase:.2f}" if not np.isinf(mase) else "N/A"}
-        - {"✅ Melhor que naive forecast" if mase < 1.0 else "⚠️ Similar ao naive" if mase < 1.5 else "❌ Pior que naive"}
-        - Compara performance com um modelo simples (naive forecast)
-        - MASE < 1.0 significa que o modelo é melhor que apenas repetir o último valor
+        # Mean of actual values for context
+        y_mean = y_test_true.mean()
 
-        ### 🧠 Qual métrica usar?
-        - **Para interpretação**: Use **MAE** ou **MAPE** (mesma unidade/proporção do preço)
-        - **Para otimização**: Minimize **RMSE** (mais sensível a outliers)
-        - **Para comparação**: Use **R²** ou **MASE** (independente da escala)
-        - **Combinado**: Bom modelo tem MAE baixo + R² alto + MASE < 1.0
-        """)
+        # Calculate residuals
+        residuals = y_test_true.values - pred_test
+
+        # Display metrics in columns
+        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+
+        with col_m1:
+            mae_pct = (mae / y_mean * 100) if y_mean != 0 else 0
+            mae_color = "🟢" if mae_pct < 3 else "🟡" if mae_pct < 7 else "🔴"
+            st.metric(
+                "MAE",
+                f"{mae:.2f}",
+                f"{mae_color} {mae_pct:.1f}%",
+                help="Erro médio absoluto em unidades do preço"
+            )
+
+        with col_m2:
+            rmse_pct = (rmse / y_mean * 100) if y_mean != 0 else 0
+            rmse_color = "🟢" if rmse_pct < 5 else "🟡" if rmse_pct < 10 else "🔴"
+            st.metric(
+                "RMSE",
+                f"{rmse:.2f}",
+                f"{rmse_color} {rmse_pct:.1f}%",
+                help="Raiz do erro quadrático médio (penaliza grandes erros)"
+            )
+
+        with col_m3:
+            r2_color = "🟢" if r2 > 0.7 else "🟡" if r2 > 0.3 else "🔴"
+            r2_pct = r2 * 100 if r2 > 0 else 0
+            st.metric(
+                "R²",
+                f"{r2:.3f}",
+                f"{r2_color} {r2_pct:.1f}%",
+                help="Coeficiente de determinação (% explicada)"
+            )
+
+        with col_m4:
+            if mape is not None and not np.isinf(mape):
+                mape_color = "🟢" if mape < 5 else "🟡" if mape < 10 else "🔴"
+                st.metric(
+                    "MAPE",
+                    f"{mape:.1f}%",
+                    f"{mape_color}",
+                    help="Erro percentual médio absoluto"
+                )
+            else:
+                st.metric("MAPE", "N/A", help="Não calculável")
+
+        with col_m5:
+            if not np.isinf(mase):
+                mase_color = "🟢" if mase < 1.0 else "🟡" if mase < 1.5 else "🔴"
+                st.metric(
+                    "MASE",
+                    f"{mase:.2f}",
+                    f"{mase_color}",
+                    help="Erro escalado pelo naive forecast (< 1.0 = melhor que naive)"
+                )
+            else:
+                st.metric("MASE", "N/A", help="Erro escalado")
+
+        # Interpretation guide
+        with st.expander("📖 Como interpretar as métricas"):
+            st.markdown(f"""
+            ### Contexto
+            - **Média do target**: {y_mean:.2f}
+            - **Desvio padrão**: {y_test_true.std():.2f}
+            - **Samples no teste**: {len(y_test_true)}
+
+            ### Interpretação por Métrica
+
+            **MAE (Mean Absolute Error)**
+            - Erro médio: {mae:.2f} unidades ({mae_pct:.1f}% da média)
+            - {"✅ Excelente!" if mae_pct < 3 else "⚠️ Moderado" if mae_pct < 7 else "❌ Alto"}
+            - Significa que, em média, o modelo erra {mae:.2f} unidades
+
+            **RMSE (Root Mean Squared Error)**
+            - RMSE: {rmse:.2f} ({rmse_pct:.1f}% da média)
+            - Penaliza outliers e erros grandes mais fortemente
+            - {"✅ Bom desempenho" if rmse_pct < 5 else "⚠️ Aceitável" if rmse_pct < 10 else "❌ Revisar modelo"}
+
+            **R² (Coefficient of Determination)**
+            - R²: {r2:.3f} ({r2_pct:.1f}% da variância explicada)
+            - {"✅ Modelo forte" if r2 > 0.7 else "⚠️ Modelo moderado" if r2 > 0.3 else "❌ Modelo fraco" if r2 > 0 else "❌ Pior que baseline (média)"}
+            - {f"Explica {r2_pct:.0f}% da variabilidade dos dados" if r2 > 0 else "Não consegue melhorar a baseline"}
+
+            **MAPE (Mean Absolute Percentage Error)**
+            - {f"MAPE: {mape:.1f}%" if mape and not np.isinf(mape) else "N/A"}
+            - {f"✅ Excelente precisão" if mape and mape < 5 else f"⚠️ Precisão moderada" if mape and mape < 10 else f"❌ Baixa precisão" if mape else "N/A"}
+            - Erro em % do valor real (mais comparável entre diferentes escalas)
+
+            **MASE (Mean Absolute Scaled Error)**
+            - {f"MASE: {mase:.2f}" if not np.isinf(mase) else "N/A"}
+            - {"✅ Melhor que naive forecast" if mase < 1.0 else "⚠️ Similar ao naive" if mase < 1.5 else "❌ Pior que naive"}
+            - Compara performance com um modelo simples (naive forecast)
+            - MASE < 1.0 significa que o modelo é melhor que apenas repetir o último valor
+
+            ### 🧠 Qual métrica usar?
+            - **Para interpretação**: Use **MAE** ou **MAPE** (mesma unidade/proporção do preço)
+            - **Para otimização**: Minimize **RMSE** (mais sensível a outliers)
+            - **Para comparação**: Use **R²** ou **MASE** (independente da escala)
+            - **Combinado**: Bom modelo tem MAE baixo + R² alto + MASE < 1.0
+            """)
 
 st.divider()
 
