@@ -13,13 +13,6 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-
-try:
-    from scipy import stats
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
 
 from src.data_pipeline import df as BASE_DF
 from src.utils import apply_theme, section
@@ -199,99 +192,19 @@ def extract_futures_contracts(df: pd.DataFrame) -> pd.DataFrame:
     return df_long
 
 
-@st.cache_data
-def calculate_seasonality_by_contract_month(
-    df_contracts: pd.DataFrame,
-    asset: str,
-    month_code: str,
-    years: list
-) -> pd.DataFrame:
+def get_contract_expiration_month(month_code: str) -> int:
     """
-    Calculate seasonality statistics for a specific contract month across multiple years.
-
-    Args:
-        df_contracts: Long format dataframe with all contracts
-        asset: Asset name (e.g., 'Óleo de Soja')
-        month_code: Month code (e.g., 'F' for January)
-        years: List of years to analyze
-
-    Returns:
-        DataFrame with seasonality statistics by day of year
+    Get the expiration month for a contract.
+    Most contracts expire in the month BEFORE the contract month code.
+    Example: March (H) contract expires in February.
     """
-    # Filter by asset, month, and years
-    df_filtered = df_contracts[
-        (df_contracts['asset'] == asset) &
-        (df_contracts['month_code'] == month_code) &
-        (df_contracts['contract_year'].isin(years))
-    ].copy()
-
-    if df_filtered.empty:
-        return pd.DataFrame()
-
-    # Calculate returns by contract
-    df_filtered = df_filtered.sort_values(['contract_id', 'date'])
-    df_filtered['return'] = df_filtered.groupby('contract_id')['price'].pct_change() * 100
-    df_filtered = df_filtered.dropna(subset=['return'])
-
-    # Add calendar features
-    df_filtered['dayofyear'] = df_filtered['date'].dt.dayofyear
-    df_filtered['month'] = df_filtered['date'].dt.month
-
-    # Group by day of year
-    grouped = df_filtered.groupby('dayofyear')['return']
-
-    # Calculate statistics
-    stats_df = pd.DataFrame({
-        'dia_do_ano': grouped.apply(lambda x: x.name).index,
-        'retorno_medio': grouped.mean(),
-        'retorno_mediano': grouped.median(),
-        'desvio_padrao': grouped.std(),
-        'minimo': grouped.min(),
-        'maximo': grouped.max(),
-        'observacoes': grouped.count(),
-    }).reset_index(drop=True)
-
-    # Hit rate (% positive returns)
-    stats_df['taxa_acerto'] = df_filtered.groupby('dayofyear')['return'].apply(
-        lambda x: (x > 0).sum() / len(x) * 100 if len(x) > 0 else 0
-    ).values
-
-    # Sharpe-like ratio
-    stats_df['sharpe_like'] = np.where(
-        stats_df['desvio_padrao'] > 0,
-        stats_df['retorno_medio'] / stats_df['desvio_padrao'],
-        0
-    )
-
-    # Statistical significance
-    if HAS_SCIPY:
-        p_values = []
-        for doy in stats_df['dia_do_ano']:
-            doy_returns = df_filtered[df_filtered['dayofyear'] == doy]['return'].values
-            if len(doy_returns) > 2:
-                _, p_val = stats.ttest_1samp(doy_returns, 0)
-                p_values.append(p_val)
-            else:
-                p_values.append(1.0)
-        stats_df['p_valor'] = p_values
-        stats_df['significante'] = stats_df['p_valor'] < 0.05
-
-    # Filter by minimum observations
-    stats_df = stats_df[stats_df['observacoes'] >= 3].copy()
-
-    # Add cumulative return
-    stats_df['retorno_acumulado'] = stats_df['retorno_medio'].cumsum()
-
-    return stats_df
-
-
-def get_date_label(day_of_year: int) -> str:
-    """Convert day of year to readable date format (DD/MM)."""
-    try:
-        date = pd.Timestamp(f'2024-01-01') + pd.Timedelta(days=int(day_of_year) - 1)
-        return date.strftime('%d/%m')
-    except:
-        return str(int(day_of_year))
+    month_code_lower = month_code.lower()
+    if month_code_lower in MONTH_CODES:
+        _, contract_month = MONTH_CODES[month_code_lower]
+        # Expiration is typically the month before
+        expiration_month = contract_month - 1 if contract_month > 1 else 12
+        return expiration_month
+    return None
 
 
 @st.cache_data
@@ -327,6 +240,9 @@ def calculate_fixation_metrics(
     df_filtered['calendar_month'] = df_filtered['date'].dt.month
     df_filtered['calendar_month_name'] = df_filtered['date'].dt.strftime('%B')
 
+    # Get expiration month for this contract
+    expiration_month = get_contract_expiration_month(month_code)
+
     # For each contract, calculate return from each calendar month to maturity
     results = []
 
@@ -338,6 +254,15 @@ def calculate_fixation_metrics(
 
         # For each calendar month in the contract's life
         for cal_month in range(1, 13):
+            # Skip months that are after or equal to expiration month (can't fix after contract expires)
+            # This ensures we don't recommend fixing in March for a contract that expires in February
+            if expiration_month is not None:
+                if cal_month >= expiration_month and expiration_month > 1:
+                    continue
+                # Handle December expiration (month 12) - skip months 12 and later
+                if expiration_month == 12 and cal_month >= 12:
+                    continue
+
             df_month = df_contract[df_contract['calendar_month'] == cal_month]
 
             if df_month.empty:
@@ -349,7 +274,7 @@ def calculate_fixation_metrics(
             # Calculate return to maturity
             ret_to_maturity = (maturity_price - fixation_price) / fixation_price * 100
 
-            # Calculate drawdown during the period
+            # Calculate drawdown during the period (worst case from fixation to maturity)
             future_prices = df_contract[df_contract['date'] >= df_month['date'].iloc[0]]['price']
             if len(future_prices) > 1:
                 drawdown = ((future_prices.min() - fixation_price) / fixation_price * 100)
@@ -403,7 +328,7 @@ def calculate_fixation_metrics(
     }
     monthly_stats['mes_nome'] = monthly_stats['mes_calendario'].map(month_names)
 
-    # Calculate risk-adjusted return
+    # Calculate risk-adjusted return (Sharpe-like)
     monthly_stats['sharpe_like'] = np.where(
         monthly_stats['volatilidade'] > 0,
         monthly_stats['retorno_medio'] / monthly_stats['volatilidade'],
@@ -420,7 +345,7 @@ with st.spinner("Carregando e processando contratos futuros..."):
     df_contracts = extract_futures_contracts(BASE_DF)
 
 if df_contracts.empty:
-    st.error("❌ Nenhum contrato futuro encontrado no dataset. Verifique o formato dos dados.")
+    st.error("Nenhum contrato futuro encontrado no dataset. Verifique o formato dos dados.")
     st.stop()
 
 # Get available options
@@ -431,7 +356,7 @@ available_months = sorted(
 )
 available_years = sorted(df_contracts['contract_year'].unique())
 
-st.success(f"✅ {len(df_contracts):,} observações de contratos futuros carregadas com sucesso!")
+st.success(f"{len(df_contracts):,} observações de contratos futuros carregadas com sucesso!")
 
 # ============================================================
 # Sidebar - Configuration
@@ -470,7 +395,7 @@ with st.sidebar:
     )
 
     if len(available_years_filtered) < 2:
-        st.error("❌ Menos de 2 anos disponíveis para esta combinação. Selecione outro ativo/mês.")
+        st.error("Menos de 2 anos disponíveis para esta combinação. Selecione outro ativo/mês.")
         st.stop()
 
     selected_years = st.multiselect(
@@ -481,7 +406,7 @@ with st.sidebar:
     )
 
     if len(selected_years) < 2:
-        st.warning("⚠️ Selecione pelo menos 2 anos para análise estatística robusta.")
+        st.warning("Selecione pelo menos 2 anos para análise estatística robusta.")
         st.stop()
 
     st.markdown("---")
@@ -493,16 +418,9 @@ with st.sidebar:
     """)
 
 # ============================================================
-# Calculate Seasonality & Fixation Metrics
+# Calculate Fixation Metrics
 # ============================================================
-with st.spinner("Calculando padrões de sazonalidade e métricas de fixação..."):
-    seasonality_stats = calculate_seasonality_by_contract_month(
-        df_contracts,
-        selected_asset,
-        selected_month_code,
-        selected_years
-    )
-
+with st.spinner("Calculando métricas de fixação..."):
     fixation_metrics = calculate_fixation_metrics(
         df_contracts,
         selected_asset,
@@ -510,741 +428,451 @@ with st.spinner("Calculando padrões de sazonalidade e métricas de fixação...
         selected_years
     )
 
-if seasonality_stats.empty:
-    st.error("❌ Dados insuficientes para análise. Tente selecionar mais anos ou outro contrato.")
+if fixation_metrics.empty:
+    st.error("Dados insuficientes para análise. Tente selecionar mais anos ou outro contrato.")
     st.stop()
 
-if fixation_metrics.empty:
-    st.warning("⚠️ Não foi possível calcular métricas de fixação. Continuando com análise de sazonalidade básica.")
-    has_fixation_data = False
-else:
-    has_fixation_data = True
+# Get expiration info for display
+expiration_month = get_contract_expiration_month(selected_month_code)
+month_names_dict = {
+    1: 'Janeiro', 2: 'Fevereiro', 3: 'Março', 4: 'Abril',
+    5: 'Maio', 6: 'Junho', 7: 'Julho', 8: 'Agosto',
+    9: 'Setembro', 10: 'Outubro', 11: 'Novembro', 12: 'Dezembro'
+}
+expiration_month_name = month_names_dict.get(expiration_month, "N/A")
 
 # ============================================================
-# KPIs Summary - DECISÃO DE FIXAÇÃO
+# KPIs Summary - Indicadores de Fixação
 # ============================================================
-st.markdown("## 📊 Resumo Executivo - Decisão de Fixação")
+st.markdown("## 📊 Indicadores de Fixação")
 
 with st.container(border=True):
-    st.markdown(f"### Análise do Contrato **{selected_asset} - {selected_month_name} ({selected_month_code})**")
-    st.caption(f"Baseado em {len(selected_years)} contratos: {', '.join(map(str, selected_years))}")
+    st.markdown(f"### Contrato **{selected_asset} - {selected_month_name} ({selected_month_code})**")
+    st.caption(f"Baseado em {len(selected_years)} contratos históricos: {', '.join(map(str, selected_years))} | Vencimento: {expiration_month_name}")
 
-    if has_fixation_data:
-        # Fixation-focused KPIs
-        col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
 
-        # Best month to fix
-        best_month_idx = fixation_metrics['sharpe_like'].idxmax()
-        best_month = fixation_metrics.loc[best_month_idx]
+    # Best month to fix (based on risk-adjusted return)
+    best_month_idx = fixation_metrics['sharpe_like'].idxmax()
+    best_month = fixation_metrics.loc[best_month_idx]
 
-        with col1:
-            st.metric(
-                "Melhor Mês para Fixar",
-                best_month['mes_nome'],
-                f"+{best_month['retorno_medio']:.2f}%",
-                help=f"Mês com melhor retorno médio até vencimento (Taxa de sucesso: {best_month['taxa_sucesso']:.0f}%)"
-            )
+    with col1:
+        st.metric(
+            "Melhor Mês para Fixar",
+            best_month['mes_nome'],
+            f"+{best_month['retorno_medio']:.1f}% retorno médio",
+            help=f"Mês com melhor relação retorno/risco histórica. Taxa de sucesso: {best_month['taxa_sucesso']:.0f}%"
+        )
 
-        # Highest win rate month
-        highest_wr_idx = fixation_metrics['taxa_sucesso'].idxmax()
-        highest_wr_month = fixation_metrics.loc[highest_wr_idx]
+    # Highest win rate month
+    highest_wr_idx = fixation_metrics['taxa_sucesso'].idxmax()
+    highest_wr_month = fixation_metrics.loc[highest_wr_idx]
 
-        with col2:
-            wr_color = "🟢" if highest_wr_month['taxa_sucesso'] >= 70 else "🟡" if highest_wr_month['taxa_sucesso'] >= 60 else "🔴"
-            st.metric(
-                "Maior Probabilidade",
-                highest_wr_month['mes_nome'],
-                f"{highest_wr_month['taxa_sucesso']:.0f}% {wr_color}",
-                help=f"Mês com maior taxa de sucesso (retorno médio: {highest_wr_month['retorno_medio']:.2f}%)"
-            )
+    with col2:
+        wr_color = "🟢" if highest_wr_month['taxa_sucesso'] >= 70 else "🟡" if highest_wr_month['taxa_sucesso'] >= 60 else "🔴"
+        st.metric(
+            f"Maior Taxa de Sucesso",
+            f"{highest_wr_month['mes_nome']}",
+            f"{highest_wr_month['taxa_sucesso']:.0f}% {wr_color}",
+            help=f"Mês em que fixar resultou em lucro na maior % dos casos. Em {highest_wr_month['taxa_sucesso']:.0f}% das vezes, o preço no vencimento foi maior que o preço de fixação."
+        )
 
-        # Worst month (highest risk)
-        worst_month_idx = fixation_metrics['drawdown_maximo'].idxmin()
-        worst_month = fixation_metrics.loc[worst_month_idx]
+    # Month with lowest risk (lowest drawdown)
+    lowest_dd_idx = fixation_metrics['drawdown_maximo'].idxmax()  # Less negative = better
+    lowest_dd_month = fixation_metrics.loc[lowest_dd_idx]
 
-        with col3:
-            st.metric(
-                "Maior Risco (Drawdown)",
-                worst_month['mes_nome'],
-                f"{worst_month['drawdown_maximo']:.2f}%",
-                delta_color="inverse",
-                help=f"Mês com maior drawdown máximo observado historicamente"
-            )
+    with col3:
+        st.metric(
+            "Menor Risco de Perda",
+            lowest_dd_month['mes_nome'],
+            f"{lowest_dd_month['drawdown_maximo']:.1f}% pior caso",
+            help=f"Mês com menor queda máxima entre fixação e vencimento. Drawdown = maior queda observada após fixar."
+        )
 
-        # Average return to maturity
-        avg_return_all = fixation_metrics['retorno_medio'].mean()
-        ret_color = "🟢" if avg_return_all > 0 else "🔴"
+    # Number of contracts analyzed
+    total_contracts = len(selected_years)
+    total_fixations = fixation_metrics['total_obs'].sum()
 
-        with col4:
-            st.metric(
-                "Retorno Médio (Fixação→Vcto)",
-                f"{avg_return_all:.2f}% {ret_color}",
-                help="Retorno médio de todas as fixações até o vencimento"
-            )
-
-        # Total observations
-        total_fixations = fixation_metrics['total_obs'].sum()
-
-        with col5:
-            st.metric(
-                "Total de Fixações",
-                f"{total_fixations:,}",
-                help=f"Total de observações de fixação analisadas"
-            )
-
-    else:
-        # Fallback to basic seasonality KPIs if no fixation data
-        col1, col2, col3, col4, col5 = st.columns(5)
-
-        best_idx = seasonality_stats['sharpe_like'].idxmax()
-        best_period = seasonality_stats.loc[best_idx]
-
-        with col1:
-            st.metric(
-                "Melhor Dia (Sharpe)",
-                get_date_label(best_period['dia_do_ano']),
-                f"{best_period['retorno_medio']:.2f}%",
-                help=f"Dia com melhor retorno ajustado por risco"
-            )
-
-        avg_hit_rate = seasonality_stats['taxa_acerto'].mean()
-        hit_color = "🟢" if avg_hit_rate > 55 else "🟡" if avg_hit_rate > 50 else "🔴"
-
-        with col2:
-            st.metric(
-                "Taxa de Acerto Média",
-                f"{avg_hit_rate:.1f}% {hit_color}",
-                help="% médio de dias com retorno positivo"
-            )
-
-        total_obs = seasonality_stats['observacoes'].sum()
-
-        with col3:
-            st.metric(
-                "Observações",
-                f"{total_obs:,}",
-                help=f"{len(seasonality_stats)} dias analisados"
-            )
+    with col4:
+        st.metric(
+            "Contratos Analisados",
+            f"{total_contracts}",
+            f"{total_fixations} pontos de dados",
+            help=f"Número de contratos históricos ({min(selected_years)}-{max(selected_years)}) e total de observações mensais analisadas."
+        )
 
 st.divider()
 
 # ============================================================
 # Fixation Analysis by Calendar Month
 # ============================================================
-if has_fixation_data:
-    st.markdown("## 🎯 Análise de Fixação por Mês Calendário")
-    st.markdown("**Pergunta-chave:** *Em qual mês devo fixar este contrato para maximizar retorno até o vencimento?*")
-
-    with st.container(border=True):
-        # Create fixation heatmap table
-        st.markdown("### 📊 Matriz de Decisão de Fixação")
-
-        # Prepare display dataframe
-        display_fix = fixation_metrics[['mes_nome', 'retorno_medio', 'taxa_sucesso', 'drawdown_maximo', 'volatilidade', 'total_obs']].copy()
-        display_fix.columns = ['Mês de Fixação', 'Retorno Médio (%)', 'Taxa de Sucesso (%)', 'Drawdown Máx (%)', 'Volatilidade (%)', 'Observações']
-
-        # Style the dataframe
-        def color_returns(val):
-            if val > 2:
-                return 'background-color: #00cc66; color: white'
-            elif val > 0:
-                return 'background-color: #90ee90'
-            elif val > -2:
-                return 'background-color: #ffcc99'
-            else:
-                return 'background-color: #ff6666; color: white'
-
-        def color_success_rate(val):
-            if val >= 70:
-                return 'background-color: #00cc66; color: white'
-            elif val >= 60:
-                return 'background-color: #90ee90'
-            elif val >= 50:
-                return 'background-color: #ffcc99'
-            else:
-                return 'background-color: #ff6666; color: white'
-
-        styled_df = display_fix.style.format({
-            'Retorno Médio (%)': '{:.2f}',
-            'Taxa de Sucesso (%)': '{:.0f}',
-            'Drawdown Máx (%)': '{:.2f}',
-            'Volatilidade (%)': '{:.2f}',
-            'Observações': '{:.0f}'
-        }).applymap(color_returns, subset=['Retorno Médio (%)']) \
-          .applymap(color_success_rate, subset=['Taxa de Sucesso (%)'])
-
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-        col_info1, col_info2 = st.columns(2)
-
-        with col_info1:
-            st.info("""
-            💡 **Como usar esta tabela:**
-            - **Verde escuro**: Excelente período para fixação (>70% sucesso ou >2% retorno)
-            - **Verde claro**: Bom período (60-70% sucesso ou 0-2% retorno)
-            - **Laranja**: Neutro/arriscado (50-60% sucesso ou -2 a 0% retorno)
-            - **Vermelho**: Evitar fixação (<50% sucesso ou <-2% retorno)
-            """)
-
-        with col_info2:
-            best_fix_month = fixation_metrics.loc[fixation_metrics['sharpe_like'].idxmax()]
-            worst_fix_month = fixation_metrics.loc[fixation_metrics['sharpe_like'].idxmin()]
-
-            st.success(f"""
-            ✅ **Recomendação:**
-            - **Melhor mês**: {best_fix_month['mes_nome']} (retorno: {best_fix_month['retorno_medio']:.2f}%, sucesso: {best_fix_month['taxa_sucesso']:.0f}%)
-            - **Evitar**: {worst_fix_month['mes_nome']} (retorno: {worst_fix_month['retorno_medio']:.2f}%, sucesso: {worst_fix_month['taxa_sucesso']:.0f}%)
-            """)
-
-        # Visualization: Bar chart of returns by month
-        st.markdown("### 📊 Retorno Esperado por Mês de Fixação")
-
-        fig_fix = go.Figure()
-
-        # Add bars with color coding
-        colors_bars = ['green' if x > 0 else 'red' for x in fixation_metrics['retorno_medio']]
-
-        fig_fix.add_trace(go.Bar(
-            x=fixation_metrics['mes_nome'],
-            y=fixation_metrics['retorno_medio'],
-            marker_color=colors_bars,
-            name='Retorno Médio',
-            text=fixation_metrics['retorno_medio'].round(2),
-            textposition='outside',
-            hovertemplate='<b>%{x}</b><br>Retorno: %{y:.2f}%<br>Taxa Sucesso: %{customdata:.0f}%<extra></extra>',
-            customdata=fixation_metrics['taxa_sucesso']
-        ))
-
-        # Add error bars (volatility)
-        fig_fix.add_trace(go.Scatter(
-            x=fixation_metrics['mes_nome'],
-            y=fixation_metrics['retorno_medio'],
-            error_y=dict(
-                type='data',
-                array=fixation_metrics['volatilidade'],
-                visible=True,
-                color='gray'
-            ),
-            mode='markers',
-            marker=dict(size=0),
-            showlegend=False,
-            hoverinfo='skip'
-        ))
-
-        fig_fix.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-
-        fig_fix.update_layout(
-            xaxis_title="Mês de Fixação",
-            yaxis_title="Retorno Médio até Vencimento (%)",
-            height=400,
-            template='plotly_white',
-            hovermode='x unified'
-        )
-
-        st.plotly_chart(fig_fix, use_container_width=True)
-
-        st.caption("📌 As barras de erro representam a volatilidade (±1 desvio padrão). Maior barra = maior incerteza.")
-
-    st.divider()
-
-# ============================================================
-# Main Chart - Seasonality Pattern
-# ============================================================
-st.markdown("## 📈 Padrão de Sazonalidade Diário (Detalhado)")
+st.markdown("## 🎯 Análise de Fixação por Mês")
+st.markdown(f"**Quando fixar o contrato {selected_month_name} ({selected_month_code}) para obter o melhor resultado até o vencimento em {expiration_month_name}?**")
 
 with st.container(border=True):
-    fig = make_subplots(
-        rows=3, cols=1,
-        row_heights=[0.45, 0.30, 0.25],
-        subplot_titles=(
-            "Retorno Médio Diário (%)",
-            "Retorno Acumulado (%)",
-            "Taxa de Acerto (%)"
+    # Create fixation table with clear explanations
+    st.markdown("### 📊 Comparativo de Meses para Fixação")
+
+    # Prepare display dataframe with clearer column names
+    display_fix = fixation_metrics[[
+        'mes_nome', 'retorno_medio', 'taxa_sucesso', 'drawdown_maximo',
+        'volatilidade', 'pior_caso', 'melhor_caso', 'total_obs'
+    ]].copy()
+
+    display_fix.columns = [
+        'Mês de Fixação',
+        'Retorno Médio (%)',
+        'Taxa de Sucesso (%)',
+        'Pior Queda (%)',
+        'Volatilidade (%)',
+        'Pior Resultado (%)',
+        'Melhor Resultado (%)',
+        'Amostras'
+    ]
+
+    # Style the dataframe
+    def color_returns(val):
+        if val > 2:
+            return 'background-color: #00cc66; color: white'
+        elif val > 0:
+            return 'background-color: #90ee90'
+        elif val > -2:
+            return 'background-color: #ffcc99'
+        else:
+            return 'background-color: #ff6666; color: white'
+
+    def color_success_rate(val):
+        if val >= 70:
+            return 'background-color: #00cc66; color: white'
+        elif val >= 60:
+            return 'background-color: #90ee90'
+        elif val >= 50:
+            return 'background-color: #ffcc99'
+        else:
+            return 'background-color: #ff6666; color: white'
+
+    styled_df = display_fix.style.format({
+        'Retorno Médio (%)': '{:.1f}',
+        'Taxa de Sucesso (%)': '{:.0f}',
+        'Pior Queda (%)': '{:.1f}',
+        'Volatilidade (%)': '{:.1f}',
+        'Pior Resultado (%)': '{:.1f}',
+        'Melhor Resultado (%)': '{:.1f}',
+        'Amostras': '{:.0f}'
+    }).applymap(color_returns, subset=['Retorno Médio (%)']) \
+      .applymap(color_success_rate, subset=['Taxa de Sucesso (%)'])
+
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+    # Legend and explanation
+    with st.expander("ℹ️ Como interpretar esta tabela"):
+        st.markdown("""
+        **Colunas explicadas:**
+
+        | Coluna | Significado |
+        |--------|-------------|
+        | **Mês de Fixação** | Mês em que você fixa o preço do contrato frame |
+        | **Retorno Médio (%)** | Ganho ou perda média entre o preço fixado e o preço no vencimento |
+        | **Taxa de Sucesso (%)** | % de vezes que fixar nesse mês resultou em lucro (preço vencimento > preço fixação) |
+        | **Pior Queda (%)** | Maior queda de preço observada após fixar (risco de marcação a mercado) |
+        | **Volatilidade (%)** | Variabilidade dos retornos - quanto maior, mais incerto |
+        | **Pior/Melhor Resultado** | Extremos históricos de retorno |
+        | **Amostras** | Quantidade de observações (mais amostras = mais confiável) |
+
+        **Cores:**
+        - 🟢 **Verde escuro**: Excelente (>70% sucesso ou >2% retorno)
+        - 🟢 **Verde claro**: Bom (60-70% sucesso ou 0-2% retorno)
+        - 🟠 **Laranja**: Neutro (50-60% sucesso ou -2% a 0% retorno)
+        - 🔴 **Vermelho**: Desfavorável (<50% sucesso ou <-2% retorno)
+        """)
+
+    # Recommendation box
+    best_fix_month = fixation_metrics.loc[fixation_metrics['sharpe_like'].idxmax()]
+    worst_fix_month = fixation_metrics.loc[fixation_metrics['sharpe_like'].idxmin()]
+
+    col_rec1, col_rec2 = st.columns(2)
+
+    with col_rec1:
+        st.success(f"""
+        **✅ Recomendação: Fixar em {best_fix_month['mes_nome']}**
+
+        - Retorno médio até vencimento: **{best_fix_month['retorno_medio']:.1f}%**
+        - Taxa de sucesso histórica: **{best_fix_month['taxa_sucesso']:.0f}%**
+        - Pior queda observada: **{best_fix_month['drawdown_maximo']:.1f}%**
+        """)
+
+    with col_rec2:
+        st.error(f"""
+        **⚠️ Evitar: Fixar em {worst_fix_month['mes_nome']}**
+
+        - Retorno médio até vencimento: **{worst_fix_month['retorno_medio']:.1f}%**
+        - Taxa de sucesso histórica: **{worst_fix_month['taxa_sucesso']:.0f}%**
+        - Pior queda observada: **{worst_fix_month['drawdown_maximo']:.1f}%**
+        """)
+
+st.divider()
+
+# ============================================================
+# Visualization: Bar chart of returns by month
+# ============================================================
+st.markdown("### 📈 Retorno Médio por Mês de Fixação")
+st.markdown("*Visualização do retorno esperado desde a fixação até o vencimento do contrato*")
+
+with st.container(border=True):
+    fig_fix = go.Figure()
+
+    # Add bars with color coding
+    colors_bars = ['#00cc66' if x > 0 else '#ff6666' for x in fixation_metrics['retorno_medio']]
+
+    fig_fix.add_trace(go.Bar(
+        x=fixation_metrics['mes_nome'],
+        y=fixation_metrics['retorno_medio'],
+        marker_color=colors_bars,
+        name='Retorno Médio',
+        text=[f"{x:.1f}%" for x in fixation_metrics['retorno_medio']],
+        textposition='outside',
+        hovertemplate=(
+            '<b>%{x}</b><br>'
+            'Retorno médio: %{y:.1f}%<br>'
+            'Taxa de sucesso: %{customdata[0]:.0f}%<br>'
+            'Pior queda: %{customdata[1]:.1f}%<br>'
+            'Amostras: %{customdata[2]:.0f}'
+            '<extra></extra>'
         ),
-        vertical_spacing=0.08
-    )
+        customdata=fixation_metrics[['taxa_sucesso', 'drawdown_maximo', 'total_obs']].values
+    ))
 
-    # Panel 1: Mean return with confidence bands
-    fig.add_trace(
-        go.Scatter(
-            x=seasonality_stats['dia_do_ano'],
-            y=seasonality_stats['retorno_medio'],
-            mode='lines',
-            name='Retorno Médio',
-            line=dict(color='#1f77b4', width=2),
-            hovertemplate='Dia %{x}: %{y:.2f}%<extra></extra>'
+    # Add error bars (volatility) to show uncertainty
+    fig_fix.add_trace(go.Scatter(
+        x=fixation_metrics['mes_nome'],
+        y=fixation_metrics['retorno_medio'],
+        error_y=dict(
+            type='data',
+            array=fixation_metrics['volatilidade'],
+            visible=True,
+            color='gray',
+            thickness=1.5
         ),
-        row=1, col=1
-    )
+        mode='markers',
+        marker=dict(size=8, color='darkblue'),
+        name='Volatilidade (±1σ)',
+        hoverinfo='skip'
+    ))
 
-    # Confidence bands
-    upper = seasonality_stats['retorno_medio'] + seasonality_stats['desvio_padrao']
-    lower = seasonality_stats['retorno_medio'] - seasonality_stats['desvio_padrao']
+    fig_fix.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
 
-    fig.add_trace(
-        go.Scatter(
-            x=seasonality_stats['dia_do_ano'],
-            y=upper,
-            mode='lines',
-            line=dict(width=0),
-            showlegend=False,
-            hoverinfo='skip'
-        ),
-        row=1, col=1
-    )
-
-    fig.add_trace(
-        go.Scatter(
-            x=seasonality_stats['dia_do_ano'],
-            y=lower,
-            mode='lines',
-            line=dict(width=0),
-            fillcolor='rgba(31, 119, 180, 0.15)',
-            fill='tonexty',
-            name='±1 Desvio Padrão',
-            hoverinfo='skip'
-        ),
-        row=1, col=1
-    )
-
-    # Zero line
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.3, row=1, col=1)
-
-    # Highlight significant periods
-    if HAS_SCIPY and 'significante' in seasonality_stats.columns:
-        sig_periods = seasonality_stats[seasonality_stats['significante']]
-        if not sig_periods.empty:
-            fig.add_trace(
-                go.Scatter(
-                    x=sig_periods['dia_do_ano'],
-                    y=sig_periods['retorno_medio'],
-                    mode='markers',
-                    name='Significante (p<0.05)',
-                    marker=dict(size=8, color='red', symbol='star'),
-                    hovertemplate='Dia %{x}: %{y:.2f}% (p<0.05)<extra></extra>'
-                ),
-                row=1, col=1
-            )
-
-    # Panel 2: Cumulative return
-    fig.add_trace(
-        go.Scatter(
-            x=seasonality_stats['dia_do_ano'],
-            y=seasonality_stats['retorno_acumulado'],
-            mode='lines',
-            name='Retorno Acumulado',
-            line=dict(color='green', width=2),
-            fill='tozeroy',
-            fillcolor='rgba(0, 128, 0, 0.1)',
-            hovertemplate='Dia %{x}: %{y:.2f}%<extra></extra>'
-        ),
-        row=2, col=1
-    )
-
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.3, row=2, col=1)
-
-    # Panel 3: Hit rate
-    colors = ['green' if x >= 60 else 'orange' if x >= 50 else 'red'
-              for x in seasonality_stats['taxa_acerto']]
-
-    fig.add_trace(
-        go.Bar(
-            x=seasonality_stats['dia_do_ano'],
-            y=seasonality_stats['taxa_acerto'],
-            marker_color=colors,
-            name='Taxa de Acerto',
-            hovertemplate='Dia %{x}: %{y:.1f}%<extra></extra>',
-            showlegend=False
-        ),
-        row=3, col=1
-    )
-
-    fig.add_hline(y=50, line_dash="dash", line_color="gray", opacity=0.5, row=3, col=1)
-
-    # Update layout
-    fig.update_xaxes(title_text="Dia do Ano", row=3, col=1)
-    fig.update_yaxes(title_text="%", row=1, col=1)
-    fig.update_yaxes(title_text="%", row=2, col=1)
-    fig.update_yaxes(title_text="%", row=3, col=1)
-
-    fig.update_layout(
-        height=900,
-        hovermode='x unified',
+    fig_fix.update_layout(
+        xaxis_title="Mês de Fixação",
+        yaxis_title="Retorno Médio até Vencimento (%)",
+        height=450,
         template='plotly_white',
+        hovermode='x unified',
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig_fix, use_container_width=True)
 
-    with st.expander("ℹ️ Como interpretar os gráficos"):
-        st.markdown(f"""
-        ### 📊 Interpretação dos Painéis
-
-        **Painel 1 - Retorno Médio Diário:**
-        - Mostra o retorno médio esperado para cada dia do ano
-        - **Banda cinza**: Volatilidade (±1 desvio padrão) - quanto maior, mais incerto
-        - **Estrelas vermelhas**: Dias com retorno estatisticamente significante
-        - **Acima de zero**: Dias historicamente positivos para compra
-        - **Abaixo de zero**: Dias historicamente negativos
-
-        **Painel 2 - Retorno Acumulado:**
-        - Soma cumulativa dos retornos médios ao longo do ano
-        - **Tendência de alta**: Períodos favoráveis para posições compradas
-        - **Tendência de baixa**: Períodos desfavoráveis
-        - **Picos e vales**: Indicam melhores momentos para entrar/sair
-
-        **Painel 3 - Taxa de Acerto:**
-        - **Verde (≥60%)**: Alta probabilidade de retorno positivo
-        - **Laranja (50-60%)**: Probabilidade neutra
-        - **Vermelho (<50%)**: Alta probabilidade de retorno negativo
-
-        ### 🎯 Como Usar para Trading
-
-        1. **Identificar janelas de alta probabilidade**: Dias com retorno médio positivo + taxa de acerto >60%
-        2. **Avaliar risco**: Bandas largas = maior incerteza, aguardar confirmação
-        3. **Planejar entradas**: Entrar antes dos picos de retorno acumulado
-        4. **Planejar saídas**: Sair próximo aos topos ou antes de quedas históricas
-        5. **Validar com significância**: Estrelas vermelhas indicam padrões estatisticamente robustos
-        """)
+    st.caption("""
+    **Como ler este gráfico:**
+    - **Barras verdes**: Meses onde fixar historicamente resultou em ganho médio
+    - **Barras vermelhas**: Meses onde fixar historicamente resultou em perda média
+    - **Linhas de erro (cinza)**: Indicam a volatilidade - barras maiores = maior incerteza no resultado
+    - **Passe o mouse** sobre as barras para ver detalhes
+    """)
 
 st.divider()
 
 # ============================================================
-# Price Bands Analysis - IMPROVED
+# Success Rate Visualization
 # ============================================================
-st.markdown("## 📊 Distribuição de Retornos - Análise de Risco")
+st.markdown("### 🎯 Taxa de Sucesso por Mês de Fixação")
+st.markdown("*Em quantos % dos casos históricos a fixação resultou em lucro?*")
 
 with st.container(border=True):
-    st.markdown(f"""
-    ### Faixas de Retorno Esperadas ao Longo do Ano
-    **Aplicação:** Estabelecer limites de stop-loss e take-profit baseados em histórico
-    """)
+    fig_success = go.Figure()
 
-    # Calculate percentile bands by day of year
-    fig_bands = go.Figure()
+    # Color based on success rate
+    colors_success = [
+        '#00cc66' if x >= 70 else '#90ee90' if x >= 60 else '#ffcc99' if x >= 50 else '#ff6666'
+        for x in fixation_metrics['taxa_sucesso']
+    ]
 
-    # Add P90 (upper bound)
-    fig_bands.add_trace(go.Scatter(
-        x=seasonality_stats['dia_do_ano'],
-        y=seasonality_stats['maximo'],
-        mode='lines',
-        name='Máximo Histórico',
-        line=dict(color='rgba(0, 200, 0, 0.3)', width=1, dash='dot'),
-        hovertemplate='Dia %{x}: %{y:.2f}%<extra></extra>'
+    fig_success.add_trace(go.Bar(
+        x=fixation_metrics['mes_nome'],
+        y=fixation_metrics['taxa_sucesso'],
+        marker_color=colors_success,
+        name='Taxa de Sucesso',
+        text=[f"{x:.0f}%" for x in fixation_metrics['taxa_sucesso']],
+        textposition='outside',
+        hovertemplate=(
+            '<b>%{x}</b><br>'
+            'Taxa de sucesso: %{y:.0f}%<br>'
+            'Baseado em %{customdata} observações'
+            '<extra></extra>'
+        ),
+        customdata=fixation_metrics['total_obs']
     ))
 
-    # Add mean + 1 std (P75 approx)
-    upper_band = seasonality_stats['retorno_medio'] + seasonality_stats['desvio_padrao']
-    fig_bands.add_trace(go.Scatter(
-        x=seasonality_stats['dia_do_ano'],
-        y=upper_band,
-        mode='lines',
-        name='Média + 1σ (≈P75)',
-        line=dict(color='green', width=2),
-        hovertemplate='Dia %{x}: %{y:.2f}%<extra></extra>'
-    ))
+    # Reference lines
+    fig_success.add_hline(y=50, line_dash="dash", line_color="gray", opacity=0.5,
+                          annotation_text="50% (aleatório)", annotation_position="right")
+    fig_success.add_hline(y=70, line_dash="dot", line_color="green", opacity=0.5,
+                          annotation_text="70% (favorável)", annotation_position="right")
 
-    # Add mean
-    fig_bands.add_trace(go.Scatter(
-        x=seasonality_stats['dia_do_ano'],
-        y=seasonality_stats['retorno_medio'],
-        mode='lines',
-        name='Retorno Médio (P50)',
-        line=dict(color='blue', width=3),
-        fill='tonexty',
-        fillcolor='rgba(0, 200, 0, 0.1)',
-        hovertemplate='Dia %{x}: %{y:.2f}%<extra></extra>'
-    ))
-
-    # Add mean - 1 std (P25 approx)
-    lower_band = seasonality_stats['retorno_medio'] - seasonality_stats['desvio_padrao']
-    fig_bands.add_trace(go.Scatter(
-        x=seasonality_stats['dia_do_ano'],
-        y=lower_band,
-        mode='lines',
-        name='Média - 1σ (≈P25)',
-        line=dict(color='orange', width=2),
-        fill='tonexty',
-        fillcolor='rgba(255, 165, 0, 0.1)',
-        hovertemplate='Dia %{x}: %{y:.2f}%<extra></extra>'
-    ))
-
-    # Add P10 (lower bound)
-    fig_bands.add_trace(go.Scatter(
-        x=seasonality_stats['dia_do_ano'],
-        y=seasonality_stats['minimo'],
-        mode='lines',
-        name='Mínimo Histórico',
-        line=dict(color='rgba(200, 0, 0, 0.3)', width=1, dash='dot'),
-        fill='tonexty',
-        fillcolor='rgba(200, 0, 0, 0.1)',
-        hovertemplate='Dia %{x}: %{y:.2f}%<extra></extra>'
-    ))
-
-    fig_bands.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-
-    fig_bands.update_layout(
-        xaxis_title="Dia do Ano",
-        yaxis_title="Retorno Esperado (%)",
-        height=500,
+    fig_success.update_layout(
+        xaxis_title="Mês de Fixação",
+        yaxis_title="Taxa de Sucesso (%)",
+        yaxis_range=[0, 100],
+        height=400,
         template='plotly_white',
-        hovermode='x unified',
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        showlegend=False
     )
 
-    st.plotly_chart(fig_bands, use_container_width=True)
+    st.plotly_chart(fig_success, use_container_width=True)
 
-    # Summary statistics
-    col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+    st.caption("""
+    **Interpretação:**
+    - **Acima de 70%**: Padrão historicamente favorável para fixação
+    - **Entre 50-70%**: Resultado incerto, considere outros fatores
+    - **Abaixo de 50%**: Historicamente desfavorável - evite fixar neste período
+    """)
 
-    with col_stat1:
-        worst_day_return = seasonality_stats['minimo'].min()
+st.divider()
+
+# ============================================================
+# Risk Analysis - Drawdown
+# ============================================================
+st.markdown("### ⚠️ Análise de Risco: Queda Máxima Após Fixação")
+st.markdown("*Qual a maior perda temporária que você pode enfrentar após fixar em cada mês?*")
+
+with st.container(border=True):
+    st.info("""
+    **O que é Drawdown (Queda Máxima)?**
+
+    Após fixar o preço, o mercado pode se mover contra você antes do vencimento.
+    O drawdown mostra a **maior queda observada** entre o momento da fixação e o vencimento.
+
+    **Por que isso importa?**
+    - Mesmo que a fixação resulte em lucro no vencimento, você pode ter que explicar perdas temporárias
+    - Importante para gestão de margem e marcação a mercado
+    - Ajuda a definir níveis de stop-loss e limites de risco
+    """)
+
+    fig_dd = go.Figure()
+
+    fig_dd.add_trace(go.Bar(
+        x=fixation_metrics['mes_nome'],
+        y=fixation_metrics['drawdown_maximo'],
+        marker_color='#ff6666',
+        name='Pior Queda',
+        text=[f"{x:.1f}%" for x in fixation_metrics['drawdown_maximo']],
+        textposition='outside',
+        hovertemplate=(
+            '<b>%{x}</b><br>'
+            'Pior queda observada: %{y:.1f}%<br>'
+            'Queda média: %{customdata:.1f}%'
+            '<extra></extra>'
+        ),
+        customdata=fixation_metrics['drawdown_medio']
+    ))
+
+    fig_dd.update_layout(
+        xaxis_title="Mês de Fixação",
+        yaxis_title="Pior Queda Observada (%)",
+        height=400,
+        template='plotly_white',
+        showlegend=False
+    )
+
+    st.plotly_chart(fig_dd, use_container_width=True)
+
+    # Summary
+    col_dd1, col_dd2, col_dd3 = st.columns(3)
+
+    safest_month = fixation_metrics.loc[fixation_metrics['drawdown_maximo'].idxmax()]
+    riskiest_month = fixation_metrics.loc[fixation_metrics['drawdown_maximo'].idxmin()]
+
+    with col_dd1:
         st.metric(
-            "Pior Dia Histórico",
-            f"{worst_day_return:.2f}%",
+            "Mês Mais Seguro",
+            safest_month['mes_nome'],
+            f"{safest_month['drawdown_maximo']:.1f}% pior queda",
+            help="Mês com menor risco de queda após fixação"
+        )
+
+    with col_dd2:
+        st.metric(
+            "Mês Mais Arriscado",
+            riskiest_month['mes_nome'],
+            f"{riskiest_month['drawdown_maximo']:.1f}% pior queda",
             delta_color="inverse",
-            help="Maior perda diária observada em toda a série"
+            help="Mês com maior risco de queda após fixação"
         )
 
-    with col_stat2:
-        best_day_return = seasonality_stats['maximo'].max()
+    with col_dd3:
+        avg_dd = fixation_metrics['drawdown_maximo'].mean()
         st.metric(
-            "Melhor Dia Histórico",
-            f"{best_day_return:.2f}%",
-            help="Maior ganho diário observado em toda a série"
+            "Queda Média (todos os meses)",
+            f"{avg_dd:.1f}%",
+            help="Média da pior queda observada em todos os meses"
         )
-
-    with col_stat3:
-        avg_volatility = seasonality_stats['desvio_padrao'].mean()
-        st.metric(
-            "Volatilidade Média",
-            f"{avg_volatility:.2f}%",
-            help="Desvio padrão médio dos retornos diários"
-        )
-
-    with col_stat4:
-        percentile_range = seasonality_stats['retorno_medio'].quantile(0.75) - seasonality_stats['retorno_medio'].quantile(0.25)
-        st.metric(
-            "Range Interquartil (IQR)",
-            f"{percentile_range:.2f}%",
-            help="Diferença entre P75 e P25 - mede dispersão dos retornos"
-        )
-
-    st.info("""
-    💡 **Aplicação para Gestão de Risco:**
-    - **Stop-Loss**: Posicione próximo à banda Média - 1σ (linha laranja) ou Mínimo Histórico
-    - **Take-Profit**: Considere realizar ganhos próximo à banda Média + 1σ (linha verde)
-    - **Sizing**: Reduza tamanho de posição em períodos com alta volatilidade (bandas largas)
-    - **Outliers**: Movimentos além do mínimo/máximo histórico podem sinalizar reversão ou nova tendência
-    """)
 
 st.divider()
 
 # ============================================================
-# Trading Windows - Opportunity Identification
+# Actionable Summary
 # ============================================================
-st.markdown("## 🎯 Janelas de Oportunidade e Zonas de Risco")
+st.markdown("## 📋 Resumo de Recomendações")
 
 with st.container(border=True):
-    st.markdown("### Períodos Estratégicos para Gestão de Risco")
+    # Get top 3 best months and worst months
+    best_months = fixation_metrics.nlargest(3, 'sharpe_like')
+    worst_months = fixation_metrics.nsmallest(3, 'sharpe_like')
 
-    # Identify opportunity windows (high win rate + positive return)
-    opportunity_windows = seasonality_stats[
-        (seasonality_stats['taxa_acerto'] >= 65) &
-        (seasonality_stats['retorno_medio'] > 0)
-    ].copy()
+    col_summary1, col_summary2 = st.columns(2)
 
-    # Identify risk zones (low win rate or negative return)
-    risk_zones = seasonality_stats[
-        (seasonality_stats['taxa_acerto'] < 45) |
-        (seasonality_stats['retorno_medio'] < -0.2)
-    ].copy()
-
-    col_opp, col_risk = st.columns(2)
-
-    with col_opp:
-        st.markdown("#### 🟢 Janelas de Oportunidade")
-        st.caption(f"Períodos com taxa de acerto ≥65% e retorno positivo")
-
-        if not opportunity_windows.empty:
-            # Group consecutive days
-            opp_groups = []
-            current_group = []
-
-            for idx, row in opportunity_windows.iterrows():
-                if not current_group:
-                    current_group = [row]
-                elif row['dia_do_ano'] - current_group[-1]['dia_do_ano'] <= 5:  # Within 5 days
-                    current_group.append(row)
-                else:
-                    opp_groups.append(current_group)
-                    current_group = [row]
-
-            if current_group:
-                opp_groups.append(current_group)
-
-            # Display top 5 windows
-            for i, group in enumerate(opp_groups[:5]):
-                start_day = group[0]['dia_do_ano']
-                end_day = group[-1]['dia_do_ano']
-                avg_return = np.mean([r['retorno_medio'] for r in group])
-                avg_hit = np.mean([r['taxa_acerto'] for r in group])
-
-                st.success(f"""
-                **Janela #{i+1}:** {get_date_label(start_day)} - {get_date_label(end_day)}
-                - Retorno médio: **{avg_return:.2f}%**
-                - Taxa de acerto: **{avg_hit:.0f}%**
-                - Duração: {len(group)} dias
-                """)
-        else:
-            st.info("Nenhuma janela de alta probabilidade identificada com os critérios atuais.")
-
-    with col_risk:
-        st.markdown("#### 🔴 Zonas de Risco")
-        st.caption(f"Períodos com taxa de acerto <45% ou retorno negativo")
-
-        if not risk_zones.empty:
-            # Group consecutive days
-            risk_groups = []
-            current_group = []
-
-            for idx, row in risk_zones.iterrows():
-                if not current_group:
-                    current_group = [row]
-                elif row['dia_do_ano'] - current_group[-1]['dia_do_ano'] <= 5:
-                    current_group.append(row)
-                else:
-                    risk_groups.append(current_group)
-                    current_group = [row]
-
-            if current_group:
-                risk_groups.append(current_group)
-
-            # Display top 5 risk zones
-            for i, group in enumerate(risk_groups[:5]):
-                start_day = group[0]['dia_do_ano']
-                end_day = group[-1]['dia_do_ano']
-                avg_return = np.mean([r['retorno_medio'] for r in group])
-                avg_hit = np.mean([r['taxa_acerto'] for r in group])
-
-                st.error(f"""
-                **Zona #{i+1}:** {get_date_label(start_day)} - {get_date_label(end_day)}
-                - Retorno médio: **{avg_return:.2f}%**
-                - Taxa de acerto: **{avg_hit:.0f}%**
-                - Duração: {len(group)} dias
-                """)
-        else:
-            st.info("Nenhuma zona de alto risco identificada com os critérios atuais.")
-
-    st.markdown("---")
-    st.info("""
-    💡 **Aplicação para Risk Management:**
-    - **Long Book**: Priorize fixações nas janelas de oportunidade (verde)
-    - **Short Book**: Considere proteção/hedge nas zonas de risco (vermelho)
-    - **Neutral**: Aguarde confirmação de mercado em períodos sem padrão claro
-    """)
-
-st.divider()
-
-# ============================================================
-# Actionable Insights
-# ============================================================
-st.markdown("## 💡 Insights Profissionais")
-
-with st.container(border=True):
-    insights = []
-
-    # Best trading window
-    best_windows = seasonality_stats[
-        (seasonality_stats['sharpe_like'] > 0.5) &
-        (seasonality_stats['taxa_acerto'] > 55)
-    ]
-
-    if not best_windows.empty:
-        best_start = best_windows.iloc[0]['dia_do_ano']
-        best_end = best_windows.iloc[-1]['dia_do_ano']
-        avg_return = best_windows['retorno_medio'].mean()
-        avg_hit = best_windows['taxa_acerto'].mean()
-
-        insights.append(f"""
-        **🎯 Janela de Oportunidade Identificada:**
-
-        Período entre **{get_date_label(best_start)}** e **{get_date_label(best_end)}** ({len(best_windows)} dias) apresenta:
-        - Retorno médio diário: **{avg_return:.2f}%**
-        - Taxa de acerto: **{avg_hit:.1f}%**
-        - Sharpe-like médio: **{best_windows['sharpe_like'].mean():.2f}**
-
-        💰 **Estratégia sugerida**: Considere posições compradas neste período, com stop loss baseado no desvio padrão.
-        """)
-
-    # High volatility periods
-    high_vol = seasonality_stats.nlargest(5, 'desvio_padrao')
-    if not high_vol.empty:
-        vol_period = high_vol.iloc[0]
-        insights.append(f"""
-        **⚠️ Período de Alta Volatilidade:**
-
-        O dia **{get_date_label(vol_period['dia_do_ano'])}** historicamente apresenta a maior volatilidade:
-        - Desvio padrão: **{vol_period['desvio_padrao']:.2f}%**
-        - Range de retornos: **{vol_period['minimo']:.2f}%** a **{vol_period['maximo']:.2f}%**
-
-        ⚡ **Atenção**: Período de alta incerteza - ajuste o tamanho da posição ou aguarde confirmação.
-        """)
-
-    # Consistent patterns
-    consistent = seasonality_stats[
-        (seasonality_stats['taxa_acerto'] >= 60) &
-        (seasonality_stats['desvio_padrao'] < seasonality_stats['desvio_padrao'].median())
-    ]
-
-    if not consistent.empty:
-        best_consistent = consistent.nlargest(1, 'retorno_medio').iloc[0]
-        insights.append(f"""
-        **✅ Padrão Mais Consistente:**
-
-        O dia **{get_date_label(best_consistent['dia_do_ano'])}** combina:
-        - Retorno médio: **{best_consistent['retorno_medio']:.2f}%**
-        - Taxa de acerto: **{best_consistent['taxa_acerto']:.1f}%**
-        - Baixa volatilidade: **{best_consistent['desvio_padrao']:.2f}%**
-
-        🛡️ **Recomendação**: Ideal para estratégias de menor risco ou posições maiores.
-        """)
-
-    # Negative zones
-    negative_zone = seasonality_stats[seasonality_stats['retorno_medio'] < -0.1]
-    if not negative_zone.empty:
-        worst_run_start = negative_zone.iloc[0]['dia_do_ano']
-        worst_run_end = negative_zone.iloc[-1]['dia_do_ano']
-        avg_neg = negative_zone['retorno_medio'].mean()
-
-        insights.append(f"""
-        **🔴 Zona de Risco Identificada:**
-
-        Período entre **{get_date_label(worst_run_start)}** e **{get_date_label(worst_run_end)}** ({len(negative_zone)} dias):
-        - Retorno médio: **{avg_neg:.2f}%** (negativo)
-        - Taxa de acerto: **{negative_zone['taxa_acerto'].mean():.1f}%**
-
-        🛑 **Ação recomendada**: Evite posições compradas ou considere proteção com hedge neste período.
-        """)
-
-    # Statistical robustness
-    if HAS_SCIPY and 'significante' in seasonality_stats.columns:
-        sig_count = seasonality_stats['significante'].sum()
-        sig_pct = sig_count / len(seasonality_stats) * 100
-
-        if sig_pct >= 20:
-            insights.append(f"""
-            **📈 Robustez Estatística:**
-
-            **{sig_count}** de **{len(seasonality_stats)}** dias ({sig_pct:.0f}%) apresentam padrões estatisticamente significantes (p < 0.05).
-
-            ✅ **Confiabilidade**: Os padrões observados têm boa robustez estatística e não são fruto apenas do acaso.
+    with col_summary1:
+        st.markdown("### ✅ Melhores Meses para Fixar")
+        for i, (_, row) in enumerate(best_months.iterrows(), 1):
+            confidence = "Alta" if row['taxa_sucesso'] >= 70 else "Média" if row['taxa_sucesso'] >= 60 else "Baixa"
+            st.markdown(f"""
+            **{i}. {row['mes_nome']}**
+            - Retorno médio: {row['retorno_medio']:.1f}%
+            - Taxa de sucesso: {row['taxa_sucesso']:.0f}%
+            - Confiança: {confidence}
             """)
 
-    # Display insights
-    for insight in insights:
-        st.info(insight)
+    with col_summary2:
+        st.markdown("### ⚠️ Meses para Evitar")
+        for i, (_, row) in enumerate(worst_months.iterrows(), 1):
+            risk = "Alto" if row['drawdown_maximo'] < -10 else "Médio" if row['drawdown_maximo'] < -5 else "Baixo"
+            st.markdown(f"""
+            **{i}. {row['mes_nome']}**
+            - Retorno médio: {row['retorno_medio']:.1f}%
+            - Taxa de sucesso: {row['taxa_sucesso']:.0f}%
+            - Risco: {risk}
+            """)
+
+    st.markdown("---")
+
+    # Key insight
+    overall_success = (fixation_metrics['retorno_medio'] > 0).sum() / len(fixation_metrics) * 100
+    best_overall = fixation_metrics.loc[fixation_metrics['sharpe_like'].idxmax()]
+
+    st.markdown(f"""
+    ### 💡 Conclusão Principal
+
+    Para o contrato **{selected_asset} {selected_month_name} ({selected_month_code})** com vencimento em **{expiration_month_name}**:
+
+    - **{overall_success:.0f}%** dos meses analisados apresentam retorno médio positivo
+    - O melhor momento para fixar é **{best_overall['mes_nome']}** com:
+        - **{best_overall['taxa_sucesso']:.0f}%** de taxa de sucesso
+        - **{best_overall['retorno_medio']:.1f}%** de retorno médio até o vencimento
+    - Análise baseada em **{len(selected_years)} anos** de dados históricos
+
+    ⚠️ *Lembre-se: resultados passados não garantem resultados futuros. Use esta análise como um dos fatores na sua decisão de fixação.*
+    """)
 
 st.divider()
 
@@ -1256,74 +884,103 @@ st.markdown("## 📥 Exportar Análise")
 col_exp1, col_exp2 = st.columns(2)
 
 with col_exp1:
-    # Export statistics
-    export_stats = seasonality_stats.copy()
-    export_stats['data'] = export_stats['dia_do_ano'].apply(get_date_label)
+    # Export fixation metrics
+    export_metrics = fixation_metrics.copy()
+    export_metrics = export_metrics.rename(columns={
+        'mes_calendario': 'Mês (número)',
+        'mes_nome': 'Mês',
+        'retorno_medio': 'Retorno Médio (%)',
+        'retorno_mediano': 'Retorno Mediano (%)',
+        'volatilidade': 'Volatilidade (%)',
+        'pior_caso': 'Pior Resultado (%)',
+        'melhor_caso': 'Melhor Resultado (%)',
+        'drawdown_medio': 'Queda Média (%)',
+        'drawdown_maximo': 'Pior Queda (%)',
+        'vitorias': 'Casos de Sucesso',
+        'total_obs': 'Total de Amostras',
+        'taxa_sucesso': 'Taxa de Sucesso (%)',
+        'sharpe_like': 'Índice Sharpe'
+    })
 
-    csv_data = export_stats.to_csv(index=False).encode('utf-8')
+    csv_data = export_metrics.to_csv(index=False).encode('utf-8')
     st.download_button(
-        "📥 Baixar Estatísticas (CSV)",
+        "📥 Baixar Métricas de Fixação (CSV)",
         data=csv_data,
-        file_name=f"sazonalidade_{selected_asset}_{selected_month_code}_{min(selected_years)}_{max(selected_years)}.csv",
+        file_name=f"fixacao_{selected_asset}_{selected_month_code}_{min(selected_years)}_{max(selected_years)}.csv",
         mime="text/csv",
-        key="download_stats"
+        key="download_metrics"
     )
 
 with col_exp2:
-    # Export insights
-    # Recalculate summary stats for export
-    total_obs_export = seasonality_stats['observacoes'].sum()
-    avg_hit_rate_export = seasonality_stats['taxa_acerto'].mean()
-    best_period_export = seasonality_stats.loc[seasonality_stats['sharpe_like'].idxmax()]
-    worst_period_export = seasonality_stats.loc[seasonality_stats['sharpe_like'].idxmin()]
+    # Export summary report
+    best_fix = fixation_metrics.loc[fixation_metrics['sharpe_like'].idxmax()]
+    worst_fix = fixation_metrics.loc[fixation_metrics['sharpe_like'].idxmin()]
 
-    insights_text = f"""ANÁLISE DE SAZONALIDADE - {selected_asset} {selected_month_name} ({selected_month_code})
+    report_text = f"""ANÁLISE DE FIXAÇÃO - {selected_asset} {selected_month_name} ({selected_month_code})
 {'='*80}
 
+CONFIGURAÇÃO
+------------
 Anos Analisados: {', '.join(map(str, selected_years))}
-Total de Observações: {total_obs_export:,}
-Dias Analisados: {len(seasonality_stats)}
+Número de Contratos: {len(selected_years)}
+Vencimento do Contrato: {expiration_month_name}
 
 {'='*80}
-RESUMO EXECUTIVO
+RECOMENDAÇÃO PRINCIPAL
 {'='*80}
 
-Melhor Dia (Sharpe): {get_date_label(best_period_export['dia_do_ano'])} (Sharpe: {best_period_export['sharpe_like']:.2f}, Retorno: {best_period_export['retorno_medio']:.2f}%)
-Pior Dia (Sharpe): {get_date_label(worst_period_export['dia_do_ano'])} (Sharpe: {worst_period_export['sharpe_like']:.2f}, Retorno: {worst_period_export['retorno_medio']:.2f}%)
-Taxa de Acerto Média: {avg_hit_rate_export:.1f}%
+MELHOR MÊS PARA FIXAR: {best_fix['mes_nome']}
+- Retorno médio até vencimento: {best_fix['retorno_medio']:.1f}%
+- Taxa de sucesso histórica: {best_fix['taxa_sucesso']:.0f}%
+- Pior queda observada: {best_fix['drawdown_maximo']:.1f}%
+- Baseado em {best_fix['total_obs']:.0f} observações
+
+MÊS PARA EVITAR: {worst_fix['mes_nome']}
+- Retorno médio até vencimento: {worst_fix['retorno_medio']:.1f}%
+- Taxa de sucesso histórica: {worst_fix['taxa_sucesso']:.0f}%
+- Pior queda observada: {worst_fix['drawdown_maximo']:.1f}%
+
+{'='*80}
+MÉTRICAS POR MÊS
+{'='*80}
+
 """
 
-    # Add fixation metrics if available
-    if has_fixation_data:
-        best_fix_month_export = fixation_metrics.loc[fixation_metrics['sharpe_like'].idxmax()]
-        insights_text += f"""
-{'='*80}
-MÉTRICAS DE FIXAÇÃO
-{'='*80}
-
-Melhor Mês para Fixar: {best_fix_month_export['mes_nome']} (Retorno: {best_fix_month_export['retorno_medio']:.2f}%, Sucesso: {best_fix_month_export['taxa_sucesso']:.0f}%)
-Retorno Médio (Fixação→Vencimento): {fixation_metrics['retorno_medio'].mean():.2f}%
+    for _, row in fixation_metrics.iterrows():
+        report_text += f"""
+{row['mes_nome']}:
+  - Retorno Médio: {row['retorno_medio']:.1f}%
+  - Taxa de Sucesso: {row['taxa_sucesso']:.0f}%
+  - Pior Queda: {row['drawdown_maximo']:.1f}%
+  - Volatilidade: {row['volatilidade']:.1f}%
+  - Amostras: {row['total_obs']:.0f}
 """
 
-    insights_text += f"""
+    report_text += f"""
 {'='*80}
-INSIGHTS ACIONÁVEIS
+NOTAS
 {'='*80}
 
-""" + "\n\n".join(insights)
+- Taxa de Sucesso: % de vezes que o preço no vencimento foi maior que o preço de fixação
+- Retorno Médio: Média da variação percentual entre preço de fixação e preço de vencimento
+- Pior Queda (Drawdown): Maior queda observada entre a fixação e o vencimento
+
+AVISO: Resultados passados não garantem resultados futuros.
+"""
 
     st.download_button(
-        "📥 Baixar Insights (TXT)",
-        data=insights_text.encode('utf-8'),
-        file_name=f"insights_{selected_asset}_{selected_month_code}_{min(selected_years)}_{max(selected_years)}.txt",
+        "📥 Baixar Relatório (TXT)",
+        data=report_text.encode('utf-8'),
+        file_name=f"relatorio_fixacao_{selected_asset}_{selected_month_code}_{min(selected_years)}_{max(selected_years)}.txt",
         mime="text/plain",
-        key="download_insights"
+        key="download_report"
     )
 
 # Footer
 st.divider()
 st.caption(f"""
-📊 **Análise de Sazonalidade:** {selected_asset} - {selected_month_name} ({selected_month_code}) |
+📊 **Análise de Fixação:** {selected_asset} - {selected_month_name} ({selected_month_code}) |
+Vencimento: {expiration_month_name} |
 Contratos: {', '.join(map(str, selected_years))} |
-Observações: {total_obs:,} | Dias: {len(seasonality_stats)}
+Total de observações: {fixation_metrics['total_obs'].sum():.0f}
 """)
