@@ -207,6 +207,25 @@ def get_contract_expiration_month(month_code: str) -> int:
     return None
 
 
+def get_valid_fixation_months(expiration_month: int, num_months: int = 8) -> list:
+    """
+    Get the valid months for fixation analysis (the N months before expiration).
+
+    Example: If contract expires in February (month 2), and num_months=8:
+    Returns: [January, December, November, October, September, August, July, June]
+    Which is: [1, 12, 11, 10, 9, 8, 7, 6]
+    """
+    valid_months = []
+    current_month = expiration_month
+
+    for _ in range(num_months):
+        # Go back one month (with wrap-around from January to December)
+        current_month = current_month - 1 if current_month > 1 else 12
+        valid_months.append(current_month)
+
+    return valid_months
+
+
 @st.cache_data
 def calculate_fixation_metrics(
     df_contracts: pd.DataFrame,
@@ -240,8 +259,9 @@ def calculate_fixation_metrics(
     df_filtered['calendar_month'] = df_filtered['date'].dt.month
     df_filtered['calendar_month_name'] = df_filtered['date'].dt.strftime('%B')
 
-    # Get expiration month for this contract
+    # Get expiration month for this contract and valid fixation months
     expiration_month = get_contract_expiration_month(month_code)
+    valid_fixation_months = get_valid_fixation_months(expiration_month, num_months=8)
 
     # For each contract, calculate return from each calendar month to maturity
     results = []
@@ -252,17 +272,8 @@ def calculate_fixation_metrics(
         # Get maturity price (last available price)
         maturity_price = df_contract['price'].iloc[-1]
 
-        # For each calendar month in the contract's life
-        for cal_month in range(1, 13):
-            # Skip months that are after or equal to expiration month (can't fix after contract expires)
-            # This ensures we don't recommend fixing in March for a contract that expires in February
-            if expiration_month is not None:
-                if cal_month >= expiration_month and expiration_month > 1:
-                    continue
-                # Handle December expiration (month 12) - skip months 12 and later
-                if expiration_month == 12 and cal_month >= 12:
-                    continue
-
+        # Only analyze the 8 months before expiration
+        for cal_month in valid_fixation_months:
             df_month = df_contract[df_contract['calendar_month'] == cal_month]
 
             if df_month.empty:
@@ -334,6 +345,13 @@ def calculate_fixation_metrics(
         monthly_stats['retorno_medio'] / monthly_stats['volatilidade'],
         0
     )
+
+    # Sort by the order of valid_fixation_months (reversed to show furthest first)
+    # Create a sort order: furthest from expiration to closest
+    display_order = list(reversed(valid_fixation_months))
+    month_order_map = {month: idx for idx, month in enumerate(display_order)}
+    monthly_stats['sort_order'] = monthly_stats['mes_calendario'].map(month_order_map)
+    monthly_stats = monthly_stats.sort_values('sort_order').drop(columns=['sort_order'])
 
     return monthly_stats
 
