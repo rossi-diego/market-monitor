@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel, oil_share
+from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel, oil_share, gold_bitcoin
 from src.visualization import plot_ratio_std_plotly
 from src.utils import apply_theme, date_range_picker, rsi, section
 
@@ -44,6 +44,12 @@ RATIOS = {
         "desc": "Participação do óleo no valor total da soja (CME)",
         "interpretation": "% do valor da soja que vem do óleo. Média histórica ~19-22%.",
         "range": "Historicamente entre 16% e 25%"
+    },
+    "Ouro/Bitcoin": {
+        "data": (gold_bitcoin, "gold_bitcoin"),
+        "desc": "Relação entre Ouro (GCC1, USD/oz) e Bitcoin (BTC=, USD)",
+        "interpretation": "Ratio alto indica ouro caro vs bitcoin. Ratio baixo indica bitcoin caro vs ouro. Útil para análise de ativos de reserva de valor.",
+        "range": "Varia significativamente com a volatilidade do Bitcoin"
     },
 }
 

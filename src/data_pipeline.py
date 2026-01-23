@@ -302,6 +302,29 @@ def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
                 .reset_index(drop=True)
             )
 
+    # --- Gold / Bitcoin ratio ---------------------------------------------
+    if {"gcc1", "btc="}.issubset(df.columns):
+        v = df[["date", "gcc1", "btc="]].copy()
+
+        # Ensure proper dtypes
+        v["date"] = pd.to_datetime(v["date"], errors="coerce")
+        v[["gcc1", "btc="]] = v[["gcc1", "btc="]].apply(
+            pd.to_numeric, errors="coerce"
+        )
+        v = v.dropna().copy()
+
+        # Avoid division by zero
+        v = v[v["btc="] != 0].copy()
+        if not v.empty:
+            # Gold (USD/oz) / Bitcoin (USD) ratio
+            v["gold_bitcoin"] = v["gcc1"] / v["btc="]
+
+            views["gold_bitcoin"] = (
+                v[["date", "gold_bitcoin"]]
+                .sort_values("date")
+                .reset_index(drop=True)
+            )
+
     return views
 
 # -----------------------------
@@ -333,7 +356,8 @@ def load_convenience_views() -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
 df, _views = load_convenience_views()
 
 # Expose the most common views directly as module-level variables
-oleo_farelo = _views.get("oleo_farelo")
-oleo_palma  = _views.get("oleo_palma")
-oleo_diesel = _views.get("oleo_diesel")
-oil_share   = _views.get("oil_share")
+oleo_farelo  = _views.get("oleo_farelo")
+oleo_palma   = _views.get("oleo_palma")
+oleo_diesel  = _views.get("oleo_diesel")
+oil_share    = _views.get("oil_share")
+gold_bitcoin = _views.get("gold_bitcoin")
