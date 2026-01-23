@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 
-from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel, oil_share, gold_bitcoin
+from src.data_pipeline import oleo_farelo, oleo_palma, oleo_diesel, oil_share, gold_bitcoin, gold_wti
 from src.visualization import plot_ratio_std_plotly
 from src.utils import apply_theme, date_range_picker, rsi, section
 
@@ -50,6 +50,12 @@ RATIOS = {
         "desc": "Relação entre Ouro (GCC1, USD/oz) e Bitcoin (BTC=, USD)",
         "interpretation": "Ratio alto indica ouro caro vs bitcoin. Ratio baixo indica bitcoin caro vs ouro. Útil para análise de ativos de reserva de valor.",
         "range": "Varia significativamente com a volatilidade do Bitcoin"
+    },
+    "Ouro/WTI": {
+        "data": (gold_wti, "gold_wti"),
+        "desc": "Relação entre Ouro (GCC1, USD/oz) e Petróleo WTI (CLC1, USD/bbl)",
+        "interpretation": "Ratio alto indica ouro caro vs petróleo. Ratio baixo indica petróleo caro vs ouro. Indicador clássico de ciclos econômicos e inflação.",
+        "range": "Historicamente entre 10 e 40 barris por onça"
     },
 }
 

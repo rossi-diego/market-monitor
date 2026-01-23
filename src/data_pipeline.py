@@ -325,6 +325,29 @@ def build_views(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
                 .reset_index(drop=True)
             )
 
+    # --- Gold / WTI Oil ratio ---------------------------------------------
+    if {"gcc1", "clc1"}.issubset(df.columns):
+        v = df[["date", "gcc1", "clc1"]].copy()
+
+        # Ensure proper dtypes
+        v["date"] = pd.to_datetime(v["date"], errors="coerce")
+        v[["gcc1", "clc1"]] = v[["gcc1", "clc1"]].apply(
+            pd.to_numeric, errors="coerce"
+        )
+        v = v.dropna().copy()
+
+        # Avoid division by zero
+        v = v[v["clc1"] != 0].copy()
+        if not v.empty:
+            # Gold (USD/oz) / WTI Oil (USD/bbl) ratio
+            v["gold_wti"] = v["gcc1"] / v["clc1"]
+
+            views["gold_wti"] = (
+                v[["date", "gold_wti"]]
+                .sort_values("date")
+                .reset_index(drop=True)
+            )
+
     return views
 
 # -----------------------------
@@ -361,3 +384,4 @@ oleo_palma   = _views.get("oleo_palma")
 oleo_diesel  = _views.get("oleo_diesel")
 oil_share    = _views.get("oil_share")
 gold_bitcoin = _views.get("gold_bitcoin")
+gold_wti     = _views.get("gold_wti")
