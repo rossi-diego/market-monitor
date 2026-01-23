@@ -109,6 +109,36 @@ ASSET_CATEGORIES = {
     "₿ Cripto": [
         ("Bitcoin (BTC=)", "btc="),
     ],
+    "📊 Ações": [
+        ("Petrobras (PETR4)", "petr4.sa"),
+        ("Itaúsa (ITSA4)", "itsa4.sa"),
+        ("Banco do Brasil (BBAS3)", "bbas3.sa"),
+        ("Bradesco (BBDC4)", "bbdc4.sa"),
+        ("Taesa (TAEE4)", "taee4.sa"),
+        ("Cemig (CMIG4", "cmig4.sa"),
+        ("Exxon Mobil (XOM)", "xom"),
+        ("AMD (AMD)", "amd.o"),
+        ("ARM Holdings (ARMH)", "arm.o"),
+        ("Lilly (LLY)", "lly"),               
+        ("Nvidia (NVDA)", "nvda.o"),
+        ("Novo Nordisk (NVO)", "nvo"),
+        ("Bunge Limited (BG)", "bg"),
+        ("Archer Daniels Midland (ADM)", "adm"),
+    ],
+    "📊 FIIs": [
+        ("VGIA11", "vgia11.sa"),
+        ("BTAL11", "btal11.sa"),
+        ("OIAG11", "oiag11.sa"),
+        ("BTLG11", "btlg11.sa"),
+        ("XPLG11", "xplg11.sa"),
+    ],
+    "🏦 ETFs": [
+        ("IAU", "iau"),
+        ("CEF", "cef"),
+        ("CPER", "cper.k"),
+        ("AIA", "aia.o"),
+        ("DIVO", "divo.k"),
+    ],
 }
 
 # Flatten to old format for compatibility
