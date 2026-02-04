@@ -7,7 +7,8 @@
       "Bash(findstr:*)",
       "Bash(dir /s /b \"x:\\\\Riscos de Mercado\")",
       "Bash(dir /s /b \"x:\\\\Riscos de Mercado\\\\virtual\\\\*biodiesel*.py\")",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(more:*)"
     ]
   }
 }
